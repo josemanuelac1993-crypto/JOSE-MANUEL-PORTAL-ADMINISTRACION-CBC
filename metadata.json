@@ -1,0 +1,6 @@
+{
+  "name": "Tesalia cbc - Gestión de Indicadores y Seguridad Liderman",
+  "description": "Plataforma de gestión de indicadores de seguridad física y SSOMA para el proyecto Tesalia cbc, administrado por José Manuel Arguello Coloma.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
