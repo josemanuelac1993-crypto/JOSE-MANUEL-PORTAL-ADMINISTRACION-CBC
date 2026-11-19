@@ -4,7 +4,11 @@ import {
   BarChart3, 
   Building2, 
   Eye,
-  FileSpreadsheet
+  FileSpreadsheet,
+  AlertCircle,
+  ArrowRight,
+  Shield,
+  HardHat
 } from 'lucide-react';
 
 interface KPIDashboardViewProps {
@@ -13,6 +17,7 @@ interface KPIDashboardViewProps {
   selectedMonth: string;
   activeMainSection: MainSection;
   onSelectIncident: (inc: Incident) => void;
+  onChangeMainSection?: (s: MainSection) => void;
 }
 
 export const KPIDashboardView: React.FC<KPIDashboardViewProps> = ({
@@ -20,9 +25,23 @@ export const KPIDashboardView: React.FC<KPIDashboardViewProps> = ({
   selectedBranch,
   selectedMonth,
   activeMainSection,
-  onSelectIncident
+  onSelectIncident,
+  onChangeMainSection
 }) => {
   const [selectedSubTab, setSelectedSubTab] = useState<'MATRIZ' | 'GRAFICOS' | 'SUCURSALES'>('MATRIZ');
+
+  // Text normalization helper to ensure matching works regardless of accents, casing or spaces
+  const normalize = (s: string) => (s || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, ' ');
+
+  const matchesItem = (incItem: string, targetItem: string) => {
+    const normInc = normalize(incItem);
+    const normTarget = normalize(targetItem);
+    if (!normInc || !normTarget) return false;
+    if (normInc === normTarget) return true;
+    if (normInc.length > 5 && normTarget.includes(normInc)) return true;
+    if (normTarget.length > 5 && normInc.includes(normTarget)) return true;
+    return false;
+  };
 
   // Filter incidents by section, branch, month
   const filteredIncidents = incidents.filter(inc => {
@@ -34,16 +53,43 @@ export const KPIDashboardView: React.FC<KPIDashboardViewProps> = ({
 
   // Calculate counts per item for the current active section
   const relevantTaxonomies = TAXONOMY.filter(t => t.mainSection === activeMainSection);
+  const matchedIncidentIds = new Set<string>();
 
-  // Group metrics by Taxonomy
+  // Group metrics by Taxonomy and dynamically add any custom assigned items
   const taxonomyStats = relevantTaxonomies.map(tax => {
     const itemsCount = tax.items.map(item => {
-      const matching = filteredIncidents.filter(inc => inc.item === item);
+      const matching = filteredIncidents.filter(inc => {
+        if (inc.subSection && inc.subSection !== tax.subSection) return false;
+        const matches = matchesItem(inc.item, item);
+        if (matches) matchedIncidentIds.add(inc.id);
+        return matches;
+      });
       return {
         name: item,
         count: matching.length,
         incidents: matching
       };
+    });
+
+    // Check for any unclassified incidents in this specific subsection
+    const unclassifiedInSub = filteredIncidents.filter(inc => 
+      inc.subSection === tax.subSection && !matchedIncidentIds.has(inc.id)
+    );
+
+    const customItemsMap = new Map<string, Incident[]>();
+    unclassifiedInSub.forEach(inc => {
+      const itemKey = inc.item?.trim() || 'Novedad Registrada';
+      if (!customItemsMap.has(itemKey)) customItemsMap.set(itemKey, []);
+      customItemsMap.get(itemKey)!.push(inc);
+      matchedIncidentIds.add(inc.id);
+    });
+
+    customItemsMap.forEach((incs, itemKey) => {
+      itemsCount.push({
+        name: itemKey,
+        count: incs.length,
+        incidents: incs
+      });
     });
 
     const totalSectionCount = itemsCount.reduce((acc, curr) => acc + curr.count, 0);
@@ -57,7 +103,26 @@ export const KPIDashboardView: React.FC<KPIDashboardViewProps> = ({
     };
   });
 
+  // Any remaining incidents in this mainSection not yet mapped
+  const unmappedIncidents = filteredIncidents.filter(inc => !matchedIncidentIds.has(inc.id));
+  if (unmappedIncidents.length > 0 && taxonomyStats.length > 0) {
+    taxonomyStats[0].items.push({
+      name: 'Otras Novedades Registradas en la Sección',
+      count: unmappedIncidents.length,
+      incidents: unmappedIncidents
+    });
+    taxonomyStats[0].total += unmappedIncidents.length;
+  }
+
   const grandTotal = taxonomyStats.reduce((acc, curr) => acc + curr.total, 0);
+
+  // Other section counts for helpful cross-section navigation alert
+  const otherSection: MainSection = activeMainSection === 'SEGURIDAD_FISICA' ? 'SSOMA' : 'SEGURIDAD_FISICA';
+  const otherSectionCount = incidents.filter(i => 
+    i.mainSection === otherSection &&
+    (selectedBranch !== 'TODAS' ? i.branch === selectedBranch : true) &&
+    (selectedMonth !== 'TODOS' ? i.month === selectedMonth : true)
+  ).length;
 
   // Calculate branch distribution
   const branchStats = BRANCHES.map(branch => {
@@ -73,14 +138,14 @@ export const KPIDashboardView: React.FC<KPIDashboardViewProps> = ({
     <div className="space-y-6 animate-in fade-in duration-300">
       
       {/* Subtabs for Matrix view vs Charts vs Branches */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-sky-100 shadow-xs">
         <div className="flex items-center gap-1.5 flex-wrap">
           <button
             onClick={() => setSelectedSubTab('MATRIZ')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
               selectedSubTab === 'MATRIZ'
-                ? 'bg-red-600 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                ? 'bg-gradient-to-r from-red-600 to-red-700 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:text-slate-900 hover:bg-slate-50 border border-sky-100'
             }`}
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -91,8 +156,8 @@ export const KPIDashboardView: React.FC<KPIDashboardViewProps> = ({
             onClick={() => setSelectedSubTab('GRAFICOS')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
               selectedSubTab === 'GRAFICOS'
-                ? 'bg-red-600 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                ? 'bg-gradient-to-r from-red-600 to-red-700 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:text-slate-900 hover:bg-slate-50 border border-sky-100'
             }`}
           >
             <BarChart3 className="w-3.5 h-3.5" />
@@ -103,8 +168,8 @@ export const KPIDashboardView: React.FC<KPIDashboardViewProps> = ({
             onClick={() => setSelectedSubTab('SUCURSALES')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
               selectedSubTab === 'SUCURSALES'
-                ? 'bg-red-600 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                ? 'bg-gradient-to-r from-red-600 to-red-700 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:text-slate-900 hover:bg-slate-50 border border-sky-100'
             }`}
           >
             <Building2 className="w-3.5 h-3.5" />
@@ -120,13 +185,41 @@ export const KPIDashboardView: React.FC<KPIDashboardViewProps> = ({
         </div>
       </div>
 
+      {/* Helpful Cross-Section Alert if current section has 0 records but other section has records */}
+      {filteredIncidents.length === 0 && otherSectionCount > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shadow-xs animate-in fade-in">
+          <div className="flex items-center gap-3 text-amber-900">
+            <div className="p-2 bg-amber-100 rounded-xl text-amber-700 shrink-0">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-bold text-amber-950">
+                La sección actual ({activeMainSection === 'SEGURIDAD_FISICA' ? 'Seguridad Física' : 'Seguridad Industrial / SSOMA'}) tiene 0 novedades con los filtros aplicados.
+              </p>
+              <p className="text-[11px] text-amber-800 mt-0.5">
+                Tienes <strong>{otherSectionCount} {otherSectionCount === 1 ? 'novedad registrada' : 'novedades registradas'}</strong> en la sección <strong>{otherSection === 'SEGURIDAD_FISICA' ? 'Seguridad Física' : 'Seguridad Industrial (SSOMA)'}</strong>.
+              </p>
+            </div>
+          </div>
+          {onChangeMainSection && (
+            <button
+              onClick={() => onChangeMainSection(otherSection)}
+              className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-colors shrink-0"
+            >
+              <span>Ver {otherSection === 'SEGURIDAD_FISICA' ? 'Seguridad Física' : 'SSOMA'} ({otherSectionCount})</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* VIEW 1: OFFICIAL MATRIX (Replicating exact PDF tables) */}
       {selectedSubTab === 'MATRIZ' && (
         <div className="space-y-6">
           {taxonomyStats.map((group, gIdx) => (
             <div 
               key={gIdx} 
-              className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs"
+              className="bg-white/90 backdrop-blur-xs border border-sky-100 rounded-2xl overflow-hidden shadow-[0_4px_20px_-4px_rgba(14,165,233,0.05)]"
             >
               {/* Table Header Header */}
               <div className={`p-4 border-b border-slate-200 flex items-center justify-between ${

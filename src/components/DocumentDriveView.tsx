@@ -296,7 +296,7 @@ export const DocumentDriveView: React.FC<DocumentDriveViewProps> = ({
     <div className="space-y-6 animate-in fade-in duration-300">
       
       {/* Top Banner / Breadcrumb & Controls */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
+      <div className="bg-white/85 backdrop-blur-md border border-sky-100 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           
           {/* Breadcrumbs Navigation */}

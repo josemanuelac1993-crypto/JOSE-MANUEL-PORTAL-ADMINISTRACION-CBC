@@ -165,13 +165,20 @@ export const TAXONOMY: CategoryDefinition[] = [
     subSectionLabel: 'Incidentes de Safety',
     classificationType: 'Condiciones Subestándares',
     items: [
+      'ESTIBAS MAL UBICADAS O MAL REALIZADAS',
+      'BLOQUEO DE EQUIPOS DE CONTRA INCENDIO',
+      'FALTA DE EXTINTORES O FECHAS VENCIDAS',
+      'FALTA DE SEÑALIZACIÓN O INADECUADA',
+      'BLOQUEO DE PUERTAS DE EMERGENCIA',
+      'DERRIVES O DESBORDES DE PRODUCTO',
+      'CABLES EXPUESTOS',
+      'PISOS MOJADOS / RESBALOSOS',
       'EQUIPOS DEFECTUOSOS / INSTALACIÓN DEFECTUOSA',
       'CONATO / INCENDIO',
       'DAÑOS MATERIALES (CAIDA O DAÑOS DE ACTIVOS DEL CLIENTE)',
       'CORTE DE FLUIDO ELÉCTRICO INT./ EXT.',
-      'FALTA DE EXTINTORES O FECHAS VENCIDAS',
-      'FALTA DE SEÑALIZACIÓN O INADECUADA',
-      'OTROS 3'
+      'TRABAJOS DE ALTO RIESGO SIN PERMISO',
+      'OTROS CONDICIONES / SAFETY'
     ]
   },
   // SSOMA - SMA
@@ -181,13 +188,14 @@ export const TAXONOMY: CategoryDefinition[] = [
     subSectionLabel: 'Incidentes de SMA (Medio Ambiente)',
     classificationType: 'Actos de Sistema Medio Ambiental',
     items: [
+      'DERRAME DE COMBUSTIBLE / QUÍMICOS',
       'LUCES ENCENDIDAS',
       'EQUIPOS Y MAQUINARIAS ENCENDIDAS',
       'DESECHOS INORGÁNICOS (PAPEL, MADERA, PLASTICO, OTROS RECICLADOS)',
       'ANIEGOS E INUNDACIONES',
       'PLAGAS: ROEDORES / AVES / INSECTOS Y OTROS',
       'FUGAS / DERRAMES / EMANACIONES',
-      'OTROS 4'
+      'OTROS AMBIENTALES (SMA)'
     ]
   },
   // SSOMA - SSO
@@ -201,7 +209,8 @@ export const TAXONOMY: CategoryDefinition[] = [
       'MANIOBRAS PELIGROSAS',
       'RIESGOS OCUPACIONALES (HERIDAS, FRACTURAS, OTROS)',
       'ENFERMEDADES OCUPACIONALES (ERGONOMIA, INHALACIÓN, OTROS)',
-      'OTROS 5'
+      'USO DE BOTIQUINES / PRIMEROS AUXILIOS',
+      'OTROS SALUD OCUPACIONAL (SSO)'
     ]
   }
 ];
@@ -300,5 +309,12 @@ export interface ChatMessage {
   text: string;
   timestamp: string;
   quickPrompts?: string[];
+  executedActions?: {
+    type: string;
+    summary: string;
+    incident?: any;
+    document?: any;
+    payload?: any;
+  }[];
 }
 

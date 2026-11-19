@@ -35,20 +35,20 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
     <div className="space-y-4">
       
       {/* Top Module Switcher: Matriz de Novedades vs Repositorio Documental Tipo Drive */}
-      <div className="flex items-center justify-between flex-wrap gap-3 pb-1 border-b border-slate-200/80">
-        <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-2xl border border-slate-200">
+      <div className="flex items-center justify-between flex-wrap gap-3 pb-1 border-b border-sky-100">
+        <div className="flex items-center gap-1.5 p-1 bg-white/80 backdrop-blur-md rounded-2xl border border-sky-150 shadow-xs">
           <button
             type="button"
             onClick={() => onChangeActiveModule('NOVEDADES')}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
               activeModule === 'NOVEDADES'
-                ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-gradient-to-r from-slate-900 to-slate-800 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
             }`}
           >
-            <Activity className="w-4 h-4 text-red-600" />
+            <Activity className="w-4 h-4 text-rose-400" />
             <span>Matriz & Novedades Operativas</span>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-700">
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-white/20 text-white">
               {totalSecurityCount + totalSSOMACount}
             </span>
           </button>
@@ -58,13 +58,13 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
             onClick={() => onChangeActiveModule('DRIVE')}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
               activeModule === 'DRIVE'
-                ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-gradient-to-r from-teal-700 to-emerald-700 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
             }`}
           >
-            <HardDrive className="w-4 h-4 text-teal-600" />
+            <HardDrive className="w-4 h-4 text-teal-400" />
             <span>Repositorio Digital Tipo Drive</span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-teal-100 text-teal-800 font-bold">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/20 text-white font-bold">
               {totalDocsCount} Archivos
             </span>
           </button>
@@ -90,8 +90,8 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
               onClick={() => onChangeMainSection('SEGURIDAD_FISICA')}
               className={`relative p-4 sm:p-5 rounded-2xl border text-left transition-all duration-200 flex items-center justify-between group ${
                 activeMainSection === 'SEGURIDAD_FISICA'
-                  ? 'bg-blue-50/70 border-blue-500 shadow-md ring-2 ring-blue-500/20'
-                  : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                  ? 'bg-gradient-to-r from-sky-50 via-blue-50/70 to-white border-blue-500 shadow-md ring-2 ring-blue-500/20'
+                  : 'bg-white/80 backdrop-blur-xs border-sky-100 hover:border-blue-300 hover:bg-white shadow-xs'
               }`}
             >
               <div className="flex items-center gap-3.5">
@@ -130,8 +130,8 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
               onClick={() => onChangeMainSection('SSOMA')}
               className={`relative p-4 sm:p-5 rounded-2xl border text-left transition-all duration-200 flex items-center justify-between group ${
                 activeMainSection === 'SSOMA'
-                  ? 'bg-emerald-50/70 border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
-                  : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                  ? 'bg-gradient-to-r from-emerald-50 via-teal-50/60 to-white border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
+                  : 'bg-white/80 backdrop-blur-xs border-sky-100 hover:border-emerald-300 hover:bg-white shadow-xs'
               }`}
             >
               <div className="flex items-center gap-3.5">
@@ -167,15 +167,15 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
           </div>
 
           {/* Secondary View Switcher: Matrix/KPIs vs Novedades List */}
-          <div className="flex items-center justify-between border-b border-slate-200 pb-3 pt-1">
+          <div className="flex items-center justify-between border-b border-sky-100 pb-3 pt-1">
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => onChangeViewMode('MATRIZ')}
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                   activeViewMode === 'MATRIZ'
-                    ? 'bg-red-600 text-white shadow-sm'
-                    : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
+                    ? 'bg-gradient-to-r from-red-600 to-red-700 text-white shadow-sm'
+                    : 'bg-white/80 backdrop-blur-xs text-slate-700 hover:text-slate-900 hover:bg-white border border-sky-100 shadow-2xs'
                 }`}
               >
                 <Activity className="w-3.5 h-3.5" />
@@ -187,8 +187,8 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
                 onClick={() => onChangeViewMode('LISTADO')}
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                   activeViewMode === 'LISTADO'
-                    ? 'bg-red-600 text-white shadow-sm'
-                    : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
+                    ? 'bg-gradient-to-r from-red-600 to-red-700 text-white shadow-sm'
+                    : 'bg-white/80 backdrop-blur-xs text-slate-700 hover:text-slate-900 hover:bg-white border border-sky-100 shadow-2xs'
                 }`}
               >
                 <ListFilter className="w-3.5 h-3.5" />

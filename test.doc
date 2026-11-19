@@ -1,0 +1,18 @@
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="----=_NextPart_Tesalia_Liderman_Doc"
+
+------=_NextPart_Tesalia_Liderman_Doc
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Test</title></head><body><h1>Hola Word</h1><img src="cid:test_img" width="200" /></body></html>
+
+------=_NextPart_Tesalia_Liderman_Doc
+Content-Type: image/jpeg
+Content-Transfer-Encoding: base64
+Content-ID: <test_img>
+Content-Location: test_img.jpg
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==
+
+------=_NextPart_Tesalia_Liderman_Doc--

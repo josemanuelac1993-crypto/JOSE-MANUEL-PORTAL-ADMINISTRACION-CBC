@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Incident, IncidentStatus } from '../types';
+import { compressImageFile } from '../utils/imageCompressor';
+import { generateWordBlob } from '../utils/wordExportHelper';
 import { 
   X, 
   MapPin, 
@@ -16,7 +18,8 @@ import {
   Layers,
   User,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Trash2
 } from 'lucide-react';
 
 interface IncidentModalProps {
@@ -24,13 +27,15 @@ interface IncidentModalProps {
   onClose: () => void;
   onUpdateStatus?: (id: string, newStatus: IncidentStatus, followUpNote?: string) => void;
   onAddEvidenceImage?: (id: string, imageUrl: string) => void;
+  onDeleteIncident?: (id: string) => void;
 }
 
 export const IncidentModal: React.FC<IncidentModalProps> = ({
   incident,
   onClose,
   onUpdateStatus,
-  onAddEvidenceImage
+  onAddEvidenceImage,
+  onDeleteIncident
 }) => {
   if (!incident) return null;
 
@@ -58,33 +63,40 @@ export const IncidentModal: React.FC<IncidentModalProps> = ({
     setNewNote('');
   };
 
-  const handleAttachImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAttachImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setUploadingImage(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const dataUrl = reader.result as string;
+    try {
+      // Compress and optimize image on client side before upload
+      const optimizedDataUrl = await compressImageFile(file);
+      
       if (onAddEvidenceImage) {
-        onAddEvidenceImage(incident.id, dataUrl);
+        await onAddEvidenceImage(incident.id, optimizedDataUrl);
       } else {
         // Direct API call fallback
-        try {
-          await fetch(`/api/incidents/${incident.id}/evidence`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ imageUrl: dataUrl })
-          });
-          if (!incident.evidenceImages) incident.evidenceImages = [];
-          incident.evidenceImages.push(dataUrl);
-        } catch (err) {
-          console.error('Error attaching image:', err);
+        const res = await fetch(`/api/incidents/${incident.id}/evidence`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageUrl: optimizedDataUrl })
+        });
+        const data = await res.json();
+        if (data.success && data.incident) {
+          incident.evidenceImages = data.incident.evidenceImages;
         }
       }
+      
+      // Auto-select latest image index
+      const newLen = incident.evidenceImages?.length || 1;
+      setSelectedImageIndex(Math.max(0, newLen - 1));
+    } catch (err: any) {
+      console.error('Error attaching image:', err);
+      alert('Error al adjuntar la imagen: ' + (err.message || 'Intente nuevamente.'));
+    } finally {
       setUploadingImage(false);
-    };
-    reader.readAsDataURL(file);
+      e.target.value = '';
+    }
   };
 
   const getStatusBadge = (status: IncidentStatus) => {
@@ -125,6 +137,27 @@ export const IncidentModal: React.FC<IncidentModalProps> = ({
     minute: '2-digit'
   });
 
+  // Download this individual novelty as a clean, presentation-ready Word document
+  const handleDownloadSingleWordDoc = () => {
+    const blob = generateWordBlob({
+      title: `FICHA TÉCNICA DE NOVEDAD OPERATIVA INDIVIDUAL #${incident.code || incident.id}`,
+      selectedMonth: incident.month || 'SEPTIEMBRE',
+      selectedBranch: incident.branch,
+      incidents: [incident],
+      isSingleIncident: true
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const cleanCode = (incident.code || incident.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    link.download = `Novedad_${cleanCode}_${incident.branch.replace(/\s+/g, '_')}.doc`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
       
@@ -159,12 +192,29 @@ export const IncidentModal: React.FC<IncidentModalProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5">
+            {onDeleteIncident && (
+              <button
+                onClick={() => {
+                  if (window.confirm(`¿Estás seguro de eliminar el registro #${incident.id} - "${incident.title}"?`)) {
+                    onDeleteIncident(incident.id);
+                    onClose();
+                  }
+                }}
+                className="p-2 text-red-600 hover:text-white bg-red-50 hover:bg-red-600 rounded-xl transition-colors border border-red-200 hover:border-red-600 shadow-2xs group/modal-del"
+                title="Eliminar este registro en caso de error"
+                aria-label="Eliminar registro"
+              >
+                <Trash2 className="w-4 h-4 text-red-600 group-hover/modal-del:text-white transition-colors" />
+              </button>
+            )}
             <button
-              onClick={() => window.print()}
-              className="p-2 text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors"
-              title="Imprimir ficha de novedad"
+              onClick={handleDownloadSingleWordDoc}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-blue-700 hover:text-white bg-blue-50 hover:bg-blue-600 rounded-xl transition-all border border-blue-200 hover:border-blue-600 shadow-2xs group/modal-doc text-xs font-bold"
+              title="Descargar esta novedad independiente en Word (.doc) para imprimir"
+              aria-label="Descargar novedad en Word"
             >
-              <Printer className="w-4 h-4" />
+              <Printer className="w-4 h-4 text-blue-600 group-hover/modal-doc:text-white transition-colors" />
+              <span>Imprimir en Word</span>
             </button>
             <button
               onClick={onClose}
@@ -423,9 +473,27 @@ export const IncidentModal: React.FC<IncidentModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
-          <div className="text-xs text-slate-600 font-medium">
-            Tesalia CBC • Administrado por José Manuel Arguello Coloma
+        <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            {onDeleteIncident && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`¿Deseas eliminar permanentemente el registro #${incident.id} - "${incident.title}"?`)) {
+                    onDeleteIncident(incident.id);
+                    onClose();
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-red-600 hover:text-white bg-red-50 hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-xl transition-all shadow-2xs group"
+                title="Eliminar este registro en caso de error"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-red-600 group-hover:text-white transition-colors" />
+                <span>Eliminar Registro</span>
+              </button>
+            )}
+            <span className="hidden sm:inline text-xs text-slate-600 font-medium">
+              Tesalia CBC • Administrado por José Manuel Arguello Coloma
+            </span>
           </div>
           <button
             onClick={onClose}

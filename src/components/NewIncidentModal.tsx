@@ -19,6 +19,7 @@ import {
   CheckCircle, 
   CheckCircle2
 } from 'lucide-react';
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface NewIncidentModalProps {
   currentOperator: Operator;
@@ -71,20 +72,20 @@ export const NewIncidentModal: React.FC<NewIncidentModalProps> = ({
     }
   };
 
-  // Image upload handler
-  const handleImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Image upload handler with client-side compression
+  const handleImageFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    Array.from(files).forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (loadEvt) => {
-        if (loadEvt.target?.result) {
-          setEvidenceImages(prev => [...prev, loadEvt.target!.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+    for (const file of Array.from(files)) {
+      try {
+        const optimized = await compressImageFile(file);
+        setEvidenceImages(prev => [...prev, optimized]);
+      } catch (err) {
+        console.error('Error compressing image:', err);
+      }
+    }
+    e.target.value = '';
   };
 
   const handleSubmit = (e: React.FormEvent) => {

@@ -21,6 +21,25 @@ import { AIUploadModal } from './components/AIUploadModal';
 import { OperatorSwitchModal } from './components/OperatorSwitchModal';
 import { DocumentDriveView } from './components/DocumentDriveView';
 import { AIChatDrawer } from './components/AIChatDrawer';
+import { ExecutiveReportModal } from './components/ExecutiveReportModal';
+import { ExcelBatchModal } from './components/ExcelBatchModal';
+import { GoogleWorkspaceModal } from './components/GoogleWorkspaceModal';
+import { EcuadorCornerFlag } from './components/EcuadorCornerFlag';
+import { User } from 'firebase/auth';
+import { auth, initAuth, googleSignIn, logoutGoogle, getStoredToken } from './services/googleAuth';
+import { saveIncidentsBackupToDrive } from './services/googleDriveService';
+import { 
+  validateFirestoreConnection,
+  fetchIncidentsFromFirestore,
+  saveIncidentToFirestore,
+  saveBatchIncidentsToFirestore,
+  deleteIncidentFromFirestore,
+  subscribeToIncidents,
+  fetchFoldersFromFirestore,
+  saveFoldersToFirestore,
+  fetchDocumentsFromFirestore,
+  saveDocumentToFirestore
+} from './services/firestoreService';
 import { 
   Loader2, 
   AlertCircle, 
@@ -32,8 +51,18 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Clear all previous caches to guarantee 100% clean startup
+  useEffect(() => {
+    try {
+      localStorage.removeItem('liderman_incidents_cache');
+      localStorage.removeItem('liderman_incidents_cache_v2');
+      localStorage.removeItem('liderman_incidents_clean_v3');
+    } catch {}
+  }, []);
+
+  // Initialize clean incidents array (0 records)
+  const [incidents, setIncidents] = useState<Incident[]>(() => []);
+  const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -44,47 +73,181 @@ export default function App() {
   const [activeModule, setActiveModule] = useState<'NOVEDADES' | 'DRIVE'>('NOVEDADES');
 
   // Navigation & Filter States for Novedades
-  const [activeMainSection, setActiveMainSection] = useState<MainSection>('SEGURIDAD_FISICA');
-  const [activeViewMode, setActiveViewMode] = useState<'MATRIZ' | 'LISTADO'>('MATRIZ');
-  const [selectedBranch, setSelectedBranch] = useState<string>('TODAS');
-  const [selectedMonth, setSelectedMonth] = useState<string>('AGOSTO');
+  const [activeMainSection, setActiveMainSection] = useState<MainSection>(() => {
+    return (localStorage.getItem('liderman_active_section') as MainSection) || 'SEGURIDAD_FISICA';
+  });
+  const [activeViewMode, setActiveViewMode] = useState<'MATRIZ' | 'LISTADO'>(() => {
+    return (localStorage.getItem('liderman_active_view') as 'MATRIZ' | 'LISTADO') || 'MATRIZ';
+  });
+  const [selectedBranch, setSelectedBranch] = useState<string>(() => {
+    return localStorage.getItem('liderman_selected_branch') || 'TODAS';
+  });
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    return localStorage.getItem('liderman_selected_month') || 'TODOS';
+  });
+
+  // Sync filters & view mode to localStorage
+  useEffect(() => {
+    localStorage.setItem('liderman_selected_branch', selectedBranch);
+  }, [selectedBranch]);
+
+  useEffect(() => {
+    localStorage.setItem('liderman_selected_month', selectedMonth);
+  }, [selectedMonth]);
+
+  useEffect(() => {
+    localStorage.setItem('liderman_active_section', activeMainSection);
+  }, [activeMainSection]);
+
+  useEffect(() => {
+    localStorage.setItem('liderman_active_view', activeViewMode);
+  }, [activeViewMode]);
+
+  // Sync incidents to localStorage whenever updated (without wiping on 0)
+  useEffect(() => {
+    if (incidents.length > 0) {
+      try {
+        localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(incidents));
+      } catch { }
+    }
+  }, [incidents]);
 
   // Drive Repository Data
   const [folders, setFolders] = useState<DocumentFolder[]>([]);
   const [documents, setDocuments] = useState<StoredDocument[]>([]);
 
-  // Modals
+  // Modals & Integrations
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [showNewIncidentModal, setShowNewIncidentModal] = useState(false);
   const [showAIUploadModal, setShowAIUploadModal] = useState(false);
   const [showOperatorModal, setShowOperatorModal] = useState(false);
   const [showAIChatDrawer, setShowAIChatDrawer] = useState(false);
+  const [showExecutiveReportModal, setShowExecutiveReportModal] = useState(false);
+  const [showExcelBatchModal, setShowExcelBatchModal] = useState(false);
+  const [showGoogleWorkspaceModal, setShowGoogleWorkspaceModal] = useState(false);
 
-  // Fetch initial incidents
+  // Google Workspace Auth State - hydrated immediately to prevent loss on page refresh
+  const [googleUser, setGoogleUser] = useState<User | null>(() => auth.currentUser);
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(() => getStoredToken());
+
+  // Validate Firestore connection on boot
+  useEffect(() => {
+    validateFirestoreConnection().catch(console.warn);
+  }, []);
+
+  // Fetch initial incidents from Google Cloud Firestore & Backend
   const fetchIncidents = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/incidents');
-      const data = await res.json();
-      if (data.success && Array.isArray(data.incidents)) {
-        setIncidents(data.incidents);
+      
+      // 1. Fetch from Firestore (Direct Cloud Persistence)
+      let cloudIncidents: Incident[] = [];
+      try {
+        cloudIncidents = await fetchIncidentsFromFirestore();
+      } catch (fsErr) {
+        console.warn('[Firestore] Error al cargar desde Firestore:', fsErr);
+      }
+
+      // 2. Fetch from Backend
+      let serverIncidents: Incident[] = [];
+      try {
+        const res = await fetch('/api/incidents');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.incidents)) {
+          serverIncidents = data.incidents;
+        }
+      } catch (srvErr) {
+        console.warn('[Backend] Error al cargar desde API:', srvErr);
+      }
+
+      // Choose most complete dataset
+      const masterList = cloudIncidents.length >= serverIncidents.length ? cloudIncidents : serverIncidents;
+
+      if (masterList.length > 0) {
+        setIncidents(masterList);
+        try {
+          localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(masterList));
+        } catch { }
+
+        // Sync missing side
+        if (cloudIncidents.length > 0 && serverIncidents.length === 0) {
+          fetch('/api/incidents/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: cloudIncidents })
+          }).catch(() => {});
+        } else if (serverIncidents.length > 0 && cloudIncidents.length === 0) {
+          saveBatchIncidentsToFirestore(serverIncidents, googleUser).catch(() => {});
+        }
+      } else {
+        // Start completely clean with 0 incidents as requested
+        setIncidents([]);
       }
     } catch (err: any) {
       console.error('Error fetching incidents:', err);
-      setErrorMessage('No se pudieron cargar los datos del servidor. Verifique su conexión.');
+      setErrorMessage('No se pudieron sincronizar los datos de la nube. Verifique su conexión.');
     } finally {
       setLoading(false);
     }
   };
 
+  // Realtime subscription to Firestore changes
+  useEffect(() => {
+    const unsubscribe = subscribeToIncidents(
+      (cloudList) => {
+        if (Array.isArray(cloudList) && cloudList.length > 0) {
+          setIncidents(cloudList);
+          try {
+            localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(cloudList));
+          } catch { }
+        }
+      },
+      (err) => console.warn('[Realtime Firestore] Info en sincronización:', err)
+    );
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
+  // Initialize Firebase Auth listener once on mount without repetitive toasts
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      async (user, token) => {
+        setGoogleUser(user);
+        setGoogleAccessToken(token);
+        // Visual indicator handled via blinking status light beside session button
+      },
+      () => {
+        setGoogleUser(null);
+        setGoogleAccessToken(null);
+      }
+    );
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
   // Fetch repository folders and documents
   const fetchDocuments = async () => {
     try {
+      // 1. Fetch from Firestore
+      const cloudFolders = await fetchFoldersFromFirestore();
+      const cloudDocs = await fetchDocumentsFromFirestore();
+
+      if (cloudFolders.length > 0) setFolders(cloudFolders);
+      if (cloudDocs.length > 0) setDocuments(cloudDocs);
+
+      // 2. Fetch from backend as fallback / mirror
       const res = await fetch('/api/documents');
       const data = await res.json();
       if (data.success) {
-        setFolders(data.folders || []);
-        setDocuments(data.documents || []);
+        if (cloudFolders.length === 0 && data.folders?.length > 0) {
+          setFolders(data.folders);
+          saveFoldersToFirestore(data.folders).catch(() => {});
+        }
+        if (cloudDocs.length === 0 && data.documents?.length > 0) {
+          setDocuments(data.documents);
+        }
       }
     } catch (err) {
       console.error('Error fetching documents:', err);
@@ -101,21 +264,35 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Clear all reports data to start fresh
-  const handleClearReports = async () => {
-    if (!window.confirm('¿Deseas limpiar todos los reportes actuales para cargar nuevos documentos (Word o PDF) desde cero?')) {
-      return;
-    }
+  // Delete incident from server, Firestore, and local state
+  const handleDeleteIncident = async (id: string) => {
     try {
-      const res = await fetch('/api/incidents/clear', { method: 'POST' });
+      // 1. Delete in Firestore cloud
+      deleteIncidentFromFirestore(id, googleUser).catch(console.warn);
+
+      // 2. Delete on backend
+      const res = await fetch(`/api/incidents/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      });
       const data = await res.json();
       if (data.success) {
-        setIncidents([]);
-        setSelectedIncident(null);
-        showToast('✓ Se han limpiado todos los reportes. Plataforma lista para recibir tus nuevos archivos.');
+        setIncidents(prev => {
+          const updated = prev.filter(i => i.id !== id);
+          try {
+            localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(updated));
+          } catch { }
+          return updated;
+        });
+        if (selectedIncident?.id === id) {
+          setSelectedIncident(null);
+        }
+        showToast(`✓ Registro #${id} eliminado correctamente de la nube.`);
+      } else {
+        alert(data.error || 'No se pudo eliminar el registro.');
       }
     } catch (err) {
-      console.error('Error clearing:', err);
+      console.error('Error deleting incident:', err);
+      alert('Error de conexión al eliminar el registro.');
     }
   };
 
@@ -129,10 +306,21 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success && data.incident) {
-        setIncidents(prev => [data.incident, ...prev]);
+        const fullIncident = data.incident;
+
+        // Save to Firestore cloud
+        saveIncidentToFirestore(fullIncident, googleUser).catch(console.warn);
+
+        setIncidents(prev => {
+          const updated = [fullIncident, ...prev];
+          try {
+            localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(updated));
+          } catch { }
+          return updated;
+        });
         setShowNewIncidentModal(false);
-        showToast(`✓ Novedad ${data.incident.id} registrada exitosamente`);
-        setSelectedIncident(data.incident);
+        showToast(`✓ Novedad ${fullIncident.id} registrada y respaldada en Google Cloud.`);
+        setSelectedIncident(fullIncident);
       } else {
         alert(data.error || 'Error al guardar la novedad');
       }
@@ -158,6 +346,15 @@ export default function App() {
       });
     }
 
+    const updatedIncident: Incident = {
+      ...target,
+      status: newStatus,
+      followUps
+    };
+
+    // Save to Firestore cloud
+    saveIncidentToFirestore(updatedIncident, googleUser).catch(console.warn);
+
     try {
       const res = await fetch(`/api/incidents/${id}`, {
         method: 'PUT',
@@ -168,11 +365,16 @@ export default function App() {
         })
       });
       const data = await res.json();
-      if (data.success && data.incident) {
-        setIncidents(prev => prev.map(item => item.id === id ? data.incident : item));
-        setSelectedIncident(data.incident);
-        showToast(`✓ Estado actualizado a "${newStatus.replace('_', ' ')}"`);
-      }
+      const finalItem = (data.success && data.incident) ? data.incident : updatedIncident;
+      setIncidents(prev => {
+        const list = prev.map(item => item.id === id ? finalItem : item);
+        try {
+          localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(list));
+        } catch { }
+        return list;
+      });
+      setSelectedIncident(finalItem);
+      showToast(`✓ Estado actualizado a "${newStatus.replace('_', ' ')}" y sincronizado en la nube.`);
     } catch (err) {
       console.error('Error updating status:', err);
     }
@@ -188,9 +390,18 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success && data.incident) {
-        setIncidents(prev => prev.map(item => item.id === id ? data.incident : item));
+        // Save to Firestore cloud
+        saveIncidentToFirestore(data.incident, googleUser).catch(console.warn);
+
+        setIncidents(prev => {
+          const list = prev.map(item => item.id === id ? data.incident : item);
+          try {
+            localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(list));
+          } catch { }
+          return list;
+        });
         setSelectedIncident(data.incident);
-        showToast('✓ Captura de foto adjuntada a la novedad');
+        showToast('✓ Captura de foto adjuntada y respaldada en la nube.');
       }
     } catch (err) {
       console.error('Error attaching image:', err);
@@ -200,6 +411,9 @@ export default function App() {
   // Import batch incidents analyzed by AI
   const handleImportAIIncidents = async (importedItems: any[]) => {
     try {
+      // Save directly to Firestore cloud
+      saveBatchIncidentsToFirestore(importedItems, googleUser).catch(console.warn);
+
       const res = await fetch('/api/incidents/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -209,10 +423,80 @@ export default function App() {
       if (data.success) {
         await fetchIncidents();
         setShowAIUploadModal(false);
-        showToast(`✨ Se importaron y categorizaron ${importedItems.length} novedades con éxito.`);
+        showToast(`✨ Se importaron ${importedItems.length} novedades y se respaldaron en Google Cloud.`);
       }
     } catch (err) {
       console.error('Error importing AI batch:', err);
+    }
+  };
+
+  // Import batch incidents from Excel Batch Importer
+  const handleImportBatch = async (items: any[], keepExisting: boolean) => {
+    try {
+      // 1. Immediately persist to Google Cloud Firestore
+      try {
+        await saveBatchIncidentsToFirestore(items, googleUser);
+        console.log('[Firestore] Lote de novedades guardado con éxito en Firestore.');
+      } catch (fsErr) {
+        console.warn('[Firestore] Error guardando en Firestore:', fsErr);
+      }
+
+      // 2. Also send to backend
+      const res = await fetch('/api/incidents/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items, keepExisting })
+      });
+      const data = await res.json();
+      const updatedList = (data.success && Array.isArray(data.incidents)) 
+        ? data.incidents 
+        : (keepExisting ? [...items, ...incidents] : items);
+
+      setIncidents(updatedList);
+      try {
+        localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(updatedList));
+      } catch { }
+
+      showToast(`✓ Se importaron ${items.length} novedades (${keepExisting ? 'Historial conservado' : 'Reemplazo'}) y se respaldaron en Google Cloud.`);
+    } catch (err: any) {
+      console.error('Error importing batch:', err);
+      alert('Error de conexión al procesar el lote.');
+    }
+  };
+
+  // Restore incidents from Google Drive or local snapshot
+  const handleRestoreIncidents = async (restored: Incident[]) => {
+    try {
+      const res = await fetch('/api/incidents/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incidents: restored })
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.incidents)) {
+        setIncidents(data.incidents);
+        try {
+          localStorage.setItem('liderman_incidents_cache_v2', JSON.stringify(data.incidents));
+        } catch { }
+        showToast(`✓ Se restauraron ${data.incidents.length} novedades desde el respaldo.`);
+      }
+    } catch (err) {
+      console.error('Error restoring incidents:', err);
+    }
+  };
+
+  // Automatic backup to Google Drive if connected
+  const handleBackupToDrive = async () => {
+    if (!googleAccessToken) return;
+    try {
+      await saveIncidentsBackupToDrive(
+        googleAccessToken,
+        incidents,
+        'Respaldo de seguridad previo a actualización batch de novedades'
+      );
+      showToast('✓ Respaldo de seguridad creado en tu Google Drive');
+    } catch (err) {
+      console.error('Error backing up to drive:', err);
     }
   };
 
@@ -261,7 +545,10 @@ export default function App() {
   const ssomaCount = incidents.filter(i => i.mainSection === 'SSOMA').length;
 
   return (
-    <div className="min-h-screen bg-white text-slate-900 flex flex-col font-sans">
+    <div className="min-h-screen bg-transparent text-slate-900 flex flex-col font-sans relative selection:bg-sky-500 selection:text-white">
+      
+      {/* Detalle patriótico: Bandera de Ecuador en la esquina diagonal */}
+      <EcuadorCornerFlag />
       
       {/* Toast Notification */}
       {toastMessage && (
@@ -274,12 +561,15 @@ export default function App() {
       {/* Header */}
       <Header
         currentOperator={currentOperator}
+        googleUser={googleUser}
         onOpenOperatorModal={() => setShowOperatorModal(true)}
         onOpenNewIncident={() => setShowNewIncidentModal(true)}
         onOpenAIUpload={() => setShowAIUploadModal(true)}
-        onOpenAIChat={() => setShowAIChatDrawer(true)}
+        onOpenExcelBatch={() => setShowExcelBatchModal(true)}
+        onOpenGoogleWorkspace={() => setShowGoogleWorkspaceModal(true)}
+        isGoogleConnected={Boolean(googleUser && googleAccessToken)}
         onExportData={handleExportExcel}
-        onClearReports={handleClearReports}
+        onOpenExecutiveReport={() => setShowExecutiveReportModal(true)}
         selectedBranch={selectedBranch}
         onChangeBranch={setSelectedBranch}
         branches={BRANCHES}
@@ -329,7 +619,7 @@ export default function App() {
                     className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-3 rounded-xl text-xs font-bold shadow-md hover:scale-[1.02] transition-all flex items-center gap-2"
                   >
                     <FileText className="w-4 h-4 text-teal-400" />
-                    <span>Subir Word / PDF con IA</span>
+                    <span>Subir Documento con IA</span>
                   </button>
                   <button
                     onClick={() => setShowNewIncidentModal(true)}
@@ -374,6 +664,7 @@ export default function App() {
                     selectedMonth={selectedMonth}
                     activeMainSection={activeMainSection}
                     onSelectIncident={(inc) => setSelectedIncident(inc)}
+                    onChangeMainSection={setActiveMainSection}
                   />
                 )}
 
@@ -385,6 +676,8 @@ export default function App() {
                     selectedBranch={selectedBranch}
                     selectedMonth={selectedMonth}
                     onSelectIncident={(inc) => setSelectedIncident(inc)}
+                    onChangeMainSection={setActiveMainSection}
+                    onDeleteIncident={handleDeleteIncident}
                   />
                 )}
               </>
@@ -404,7 +697,13 @@ export default function App() {
             onIncidentCreated={(newIncident, updatedDoc) => {
               setIncidents(prev => [newIncident, ...prev]);
               setDocuments(prev => prev.map(d => d.id === updatedDoc.id ? updatedDoc : d));
+              // Immediately switch to the novelty's section and branch
+              setActiveModule('NOVEDADES');
+              setActiveMainSection(newIncident.mainSection);
+              setSelectedBranch('TODAS');
+              if (newIncident.month) setSelectedMonth(newIncident.month);
               setSelectedIncident(newIncident);
+              showToast(`✓ Novedad creada y vinculada a ${newIncident.mainSection === 'SEGURIDAD_FISICA' ? 'Seguridad Física' : 'SSOMA'} (${newIncident.item})`);
             }}
           />
         )}
@@ -417,6 +716,7 @@ export default function App() {
         onClose={() => setSelectedIncident(null)}
         onUpdateStatus={handleUpdateIncidentStatus}
         onAddEvidenceImage={handleAddEvidenceImage}
+        onDeleteIncident={handleDeleteIncident}
       />
 
       {/* Manual Registration Modal for Console Operators */}
@@ -448,19 +748,61 @@ export default function App() {
         />
       )}
 
-      {/* Floating AI Chat Assistant Button */}
+      {/* Clean Executive Report for Word and PDF */}
+      <ExecutiveReportModal
+        isOpen={showExecutiveReportModal}
+        onClose={() => setShowExecutiveReportModal(false)}
+        incidents={incidents}
+        selectedBranch={selectedBranch}
+        selectedMonth={selectedMonth}
+        activeMainSection={activeMainSection}
+      />
+
+      {/* Excel Batch Multi-Incident & Image Assignment Modal */}
+      {showExcelBatchModal && (
+        <ExcelBatchModal
+          onClose={() => setShowExcelBatchModal(false)}
+          onImportBatch={handleImportBatch}
+          onBackupToDrive={handleBackupToDrive}
+          hasDriveAccess={Boolean(googleUser && googleAccessToken)}
+        />
+      )}
+
+      {/* Google Workspace (Drive & Sheets) Modal */}
+      {showGoogleWorkspaceModal && (
+        <GoogleWorkspaceModal
+          onClose={() => setShowGoogleWorkspaceModal(false)}
+          incidents={incidents}
+          currentUser={googleUser}
+          currentAccessToken={googleAccessToken}
+          onAuthSuccess={(u, token) => {
+            setGoogleUser(u);
+            setGoogleAccessToken(token);
+          }}
+          onAuthLogout={() => {
+            setGoogleUser(null);
+            setGoogleAccessToken(null);
+          }}
+          onRestoreIncidents={handleRestoreIncidents}
+          onLoadExcelFromDrive={() => {
+            setShowExcelBatchModal(true);
+          }}
+        />
+      )}
+
+      {/* Unified AI Assistant Floating Button */}
       <button
         onClick={() => setShowAIChatDrawer(true)}
-        className="fixed bottom-6 right-6 z-40 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white p-3.5 sm:px-4 sm:py-3 rounded-2xl shadow-xl hover:shadow-2xl flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 border border-white/20 group ring-4 ring-red-500/20"
-        title="Abrir Asistente IA Liderman (Guías y Consultas)"
+        className="fixed bottom-6 right-6 z-40 bg-gradient-to-r from-red-600 via-red-500 to-amber-600 hover:from-red-700 hover:to-amber-700 text-white p-3.5 sm:px-4 sm:py-3 rounded-2xl shadow-xl hover:shadow-2xl flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 border border-white/20 group ring-4 ring-red-500/20"
+        title="Abrir Asistente Virtual IA (Control y Modificación en Tiempo Real)"
       >
         <div className="relative">
           <Bot className="w-5 h-5 text-white animate-pulse" />
           <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-400 rounded-full border-2 border-red-600"></span>
         </div>
         <div className="hidden sm:flex flex-col text-left">
-          <span className="text-xs font-black leading-tight tracking-tight">Asistente IA Liderman</span>
-          <span className="text-[10px] text-red-100 font-medium">Guías y Soporte de Matriz</span>
+          <span className="text-xs font-black leading-tight tracking-tight">Asistente Virtual IA</span>
+          <span className="text-[10px] text-amber-200 font-bold">⚡ Control en Tiempo Real</span>
         </div>
       </button>
 
@@ -470,6 +812,37 @@ export default function App() {
         onClose={() => setShowAIChatDrawer(false)}
         onNavigateToDrive={() => setActiveModule('DRIVE')}
         onNavigateToMatrix={() => setActiveModule('NOVEDADES')}
+        onPlatformModified={(data) => {
+          if (data.updatedIncidents) {
+            setIncidents(data.updatedIncidents);
+          }
+          if (data.updatedDocuments) {
+            setDocuments(data.updatedDocuments);
+          }
+          if (data.executedActions && data.executedActions.length > 0) {
+            data.executedActions.forEach((act: any) => {
+              if (act.type === 'NAVIGATE_UI' && act.payload) {
+                if (act.payload.activeModule) setActiveModule(act.payload.activeModule);
+                if (act.payload.activeMainSection) setActiveMainSection(act.payload.activeMainSection);
+                if (act.payload.activeViewMode) setActiveViewMode(act.payload.activeViewMode);
+                if (act.payload.selectedBranch) setSelectedBranch(act.payload.selectedBranch);
+                if (act.payload.selectedMonth) setSelectedMonth(act.payload.selectedMonth);
+                if (act.payload.openIncidentId && data.updatedIncidents) {
+                  const match = data.updatedIncidents.find((i: any) => i.id === act.payload.openIncidentId);
+                  if (match) setSelectedIncident(match);
+                }
+              }
+              if (act.type === 'CREATE_INCIDENT' && act.incident) {
+                setActiveModule('NOVEDADES');
+                setActiveMainSection(act.incident.mainSection);
+                setSelectedBranch('TODAS');
+                if (act.incident.month) setSelectedMonth(act.incident.month);
+                setSelectedIncident(act.incident);
+              }
+            });
+            showToast('⚡ Modificación realizada en tiempo real por el Asistente');
+          }
+        }}
       />
 
       {/* Footer */}

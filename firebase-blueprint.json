@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "Incident": {
+      "title": "Incident",
+      "description": "Reporte de novedad operativa, seguridad física o SSOMA de Tesalia CBC",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "mainSection": { "type": "string", "enum": ["SEGURIDAD_FISICA", "SSOMA"] },
+        "subSection": { "type": "string" },
+        "classificationType": { "type": "string" },
+        "item": { "type": "string" },
+        "branch": { "type": "string" },
+        "specificLocation": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "month": { "type": "string" },
+        "year": { "type": "number" },
+        "severity": { "type": "string" },
+        "status": { "type": "string" },
+        "actionsTaken": { "type": "string" },
+        "reportedToLegio": { "type": "boolean" },
+        "legioTicketNumber": { "type": "string" },
+        "cctvCaseResolved": { "type": "boolean" },
+        "evidenceImages": { "type": "array" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" }
+      },
+      "required": ["id", "title", "branch", "mainSection", "timestamp"]
+    },
+    "DocumentFolder": {
+      "title": "DocumentFolder",
+      "description": "Carpeta del repositorio documental tipo Drive",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "color": { "type": "string" },
+        "icon": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isSystem": { "type": "boolean" }
+      },
+      "required": ["id", "name"]
+    },
+    "StoredDocument": {
+      "title": "StoredDocument",
+      "description": "Documento almacenado en el repositorio documental",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "folderId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "size": { "type": "string" },
+        "uploadedAt": { "type": "string", "format": "date-time" },
+        "uploadedBy": { "type": "string" },
+        "fileData": { "type": "string" },
+        "category": { "type": "string" },
+        "tags": { "type": "array" }
+      },
+      "required": ["id", "folderId", "name"]
+    }
+  },
+  "firestore": {
+    "/novedades_tesalia_2026/{incidentId}": {
+      "schema": "Incident",
+      "description": "Colección global oficial y limpia de novedades operativas de Tesalia CBC"
+    },
+    "/users/{userId}/incidents/{incidentId}": {
+      "schema": "Incident",
+      "description": "Novedades asociadas directamente a la cuenta de usuario de Google autenticada"
+    },
+    "/folders/{folderId}": {
+      "schema": "DocumentFolder",
+      "description": "Carpetas del repositorio documental"
+    },
+    "/documents/{documentId}": {
+      "schema": "StoredDocument",
+      "description": "Documentos subidos al repositorio documental"
+    }
+  }
+}

@@ -9,7 +9,10 @@ import {
   Loader2,
   ChevronDown,
   Layers,
-  FileText
+  FileText,
+  Zap,
+  CheckCircle2,
+  Sliders
 } from 'lucide-react';
 import { ChatMessage } from '../types';
 
@@ -18,19 +21,20 @@ interface AIChatDrawerProps {
   onClose: () => void;
   onNavigateToDrive?: () => void;
   onNavigateToMatrix?: () => void;
+  onPlatformModified?: (result: { updatedIncidents?: any[]; updatedDocuments?: any[]; executedActions?: any[] }) => void;
 }
 
 const INITIAL_MESSAGES: ChatMessage[] = [
   {
     id: 'msg-welcome',
     sender: 'assistant',
-    text: `¡Hola! Soy tu **Asistente Operativo Inteligente Liderman** para el proyecto **Tesalia CBC**, administrado por **José Manuel Arguello Coloma**.\n\nPuedo guiarte en:\n• Clasificación exacta de novedades (Seguridad Física vs SSOMA).\n• Asignación manual o análisis de archivos del Repositorio Digital.\n• Protocolos y consignas en sucursales.\n• Consultas sobre indicadores y datos registrados.\n\n¿En qué te puedo apoyar el día de hoy?`,
+    text: `¡Hola! Soy tu **Asistente Operativo Inteligente Liderman** para el proyecto **Tesalia CBC**, administrado por **José Manuel Arguello Coloma**.\n\n⚡ **Control en Tiempo Real Habilitado:**\nPuedes pedirme directamente realizar cambios en la plataforma para que no tengas que reprogramar:\n• "Registra una novedad de conato de incendio en Planta Milagro"\n• "Cambia la última novedad a estado RESUELTO"\n• "Pasa la novedad a la sección SSOMA"\n• "Llévame a ver las novedades de SSOMA"\n• "Asigna el archivo x a una novedad en Ag. Manta"\n\nTambién te guío en clasificación operativa, consignas y resolución de novedades.\n\n¿Qué deseas consultar o modificar?`,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     quickPrompts: [
-      '¿Cómo clasifico una falla de cámara CCTV?',
-      '¿Qué ítems componen SSOMA?',
-      '¿Cómo asigno un archivo del Drive si falla el análisis?',
-      '¿Cuáles son las 6 sucursales oficiales?'
+      'Registra una novedad de falla de cerradura en Planta Machala',
+      'Cambia la última novedad a estado RESUELTO',
+      'Llévame a ver las novedades de SSOMA',
+      '¿Cómo asigno un archivo del Drive a la Matriz?'
     ]
   }
 ];
@@ -39,7 +43,8 @@ export const AIChatDrawer: React.FC<AIChatDrawerProps> = ({
   isOpen,
   onClose,
   onNavigateToDrive,
-  onNavigateToMatrix
+  onNavigateToMatrix,
+  onPlatformModified
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [inputMessage, setInputMessage] = useState('');
@@ -96,9 +101,15 @@ export const AIChatDrawer: React.FC<AIChatDrawerProps> = ({
           sender: 'assistant',
           text: data.reply,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          quickPrompts: data.quickPrompts || []
+          quickPrompts: data.quickPrompts || [],
+          executedActions: data.executedActions || []
         };
         setMessages(prev => [...prev, assistantMsg]);
+
+        // Propagate real-time platform modifications to App.tsx
+        if (data.executedActions && data.executedActions.length > 0 && onPlatformModified) {
+          onPlatformModified(data);
+        }
       } else {
         throw new Error(data.error || 'Respuesta vacía');
       }
@@ -249,6 +260,24 @@ export const AIChatDrawer: React.FC<AIChatDrawerProps> = ({
                 }`}
               >
                 {renderFormattedText(msg.text)}
+
+                {/* Real-time Platform Executed Actions Badge */}
+                {msg.executedActions && msg.executedActions.length > 0 && (
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-emerald-700">
+                      <Zap className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600" />
+                      <span>Modificación Aplicada en la Plataforma:</span>
+                    </div>
+                    {msg.executedActions.map((act, actIdx) => (
+                      <div key={actIdx} className="bg-emerald-50 text-emerald-950 border border-emerald-200 rounded-xl p-2 text-xs font-semibold flex items-start gap-2 shadow-2xs">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                        <div className="leading-snug">
+                          <span>{act.summary}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <div
                   className={`text-[9px] mt-1.5 flex justify-end ${

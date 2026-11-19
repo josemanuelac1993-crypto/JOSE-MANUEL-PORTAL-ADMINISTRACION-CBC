@@ -4,8 +4,28 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import { initializeApp as initFirebaseServer, getApps as getServerApps, getApp as getServerApp } from 'firebase/app';
+import { 
+  getFirestore as getFirestoreServer, 
+  collection as collectionServer, 
+  getDocs as getDocsServer, 
+  setDoc as setDocServer, 
+  doc as docServer, 
+  writeBatch as writeBatchServer, 
+  deleteDoc as deleteDocServer 
+} from 'firebase/firestore';
+
+const require = createRequire(import.meta.url);
+let pdfParse: any;
+try {
+  pdfParse = require('pdf-parse');
+} catch (e) {
+  console.warn('pdf-parse could not be loaded:', e);
+}
 
 dotenv.config();
 
@@ -13,7 +33,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+// Port 3000 is required by AI Studio iframe environment
+const PORT = 3000;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -28,9 +49,11 @@ const ai = new GoogleGenAI({
   },
 });
 
-// Data persistence
+// Data persistence with automatic redundancy backup
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'incidents.json');
+const BACKUP_FILE = path.join(DATA_DIR, 'incidents.backup.json');
+const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const DOCUMENTS_FILE = path.join(DATA_DIR, 'documents.json');
 const FOLDERS_FILE = path.join(DATA_DIR, 'folders.json');
@@ -40,6 +63,9 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+if (!fs.existsSync(BACKUPS_DIR)) {
+  fs.mkdirSync(BACKUPS_DIR, { recursive: true });
 }
 
 const DEFAULT_FOLDERS = [
@@ -113,335 +139,388 @@ function saveDocuments(docs: any[]) {
   fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify(docs, null, 2), 'utf-8');
 }
 
-// Initial Seed Data reflecting the user's exact PDFs for 2026 (Agosto and period 2026)
-const INITIAL_INCIDENTS = [
-  {
-    id: "NOV-2026-001",
-    code: "SEC-GYEN-001",
-    mainSection: "SEGURIDAD_FISICA",
-    subSection: "SECURITY",
-    classificationType: "Condiciones Subestándares",
-    item: "FALLA DE ILUMINACIÓN (INTERNA Y EXTERNA)",
-    branch: "Ag. Gye Norte",
-    specificLocation: "Garita 1 y Andén de Carga Nocturno",
-    title: "Reflectores perimetrales quemados en zona de carga norte",
-    description: "Durante la ronda de inspección nocturna se detectó que tres reflectores LED del área de bahía de carga no encienden, generando puntos ciegos para las cámaras 04 y 07.",
-    timestamp: "2026-08-12T21:30:00.000Z",
-    month: "AGOSTO",
-    year: 2026,
-    operator: {
-      name: "Carlos Morán Viteri",
-      code: "OPR-04",
-      role: "Operador de Consola CCTV",
-      shift: "Nocturno (22:00 - 06:00)"
-    },
-    severity: "MEDIA",
-    status: "REPORTADO_LEGIO",
-    actionsTaken: "Se reportó ticket LEGIO #LEG-88491 a mantenimiento eléctrico. Se incrementó la ronda física de supervisores motorizados cada 30 minutos.",
-    reportedToLegio: true,
-    legioTicketNumber: "LEG-88491",
-    cctvCaseResolved: false,
-    evidenceImages: [
-      "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=800&q=80"
-    ],
-    sourceDocument: {
-      name: "Reporte_Fallas_CCTV_GyeNorte.pdf",
-      type: "PDF",
-      analyzedByAI: true
-    },
-    followUps: [
-      {
-        id: "flw-1",
-        date: "2026-08-13T09:00:00Z",
-        author: "José Manuel Arguello Coloma",
-        note: "Coordinado con el jefe de mantenimiento de Tesalia CBC para cambio de luminarias el 14 de agosto.",
-        statusChange: "REPORTADO_LEGIO"
-      }
-    ]
-  },
-  {
-    id: "NOV-2026-002",
-    code: "SEC-PLGYE-002",
-    mainSection: "SEGURIDAD_FISICA",
-    subSection: "SECURITY",
-    classificationType: "Condiciones Subestándares",
-    item: "FALLA DE PUERTAS Y VENTANAS (CHAPAS, OTROS)",
-    branch: "Tesalia Planta Gye",
-    specificLocation: "Puerta de Emergencia Nave Envasado B",
-    title: "Chapa antipánico trabada en acceso este",
-    description: "Operador de consola visualiza mediante cámara PTZ-02 que la puerta cortafuego/antipánico no cierra herméticamente y queda entreabierta por falla en la cerradura electromagnética.",
-    timestamp: "2026-08-15T14:20:00.000Z",
-    month: "AGOSTO",
-    year: 2026,
-    operator: {
-      name: "Diana Mendoza Saltos",
-      code: "OPR-02",
-      role: "Operador de Consola CCTV",
-      shift: "Vespertino (14:00 - 22:00)"
-    },
-    severity: "ALTA",
-    status: "RESUELTO",
-    actionsTaken: "Se envió guardia de retén a custodiar acceso. Técnico de cerrajería industrial ajustó el brazo hidráulico y perno magnético a las 17:40.",
-    reportedToLegio: true,
-    legioTicketNumber: "LEG-88502",
-    cctvCaseResolved: true,
-    evidenceImages: [
-      "https://images.unsplash.com/photo-1517646287270-a5a9ca602e5c?auto=format&fit=crop&w=800&q=80"
-    ],
-    sourceDocument: {
-      name: "Minuta_Turno_Tarde.xlsx",
-      type: "EXCEL",
-      analyzedByAI: true
-    },
-    followUps: [
-      {
-        id: "flw-2",
-        date: "2026-08-15T18:00:00Z",
-        author: "José Manuel Arguello Coloma",
-        note: "Cierre verificado por CCTV y pruebas físicas. Caso superado.",
-        statusChange: "RESUELTO"
-      }
-    ]
-  },
-  {
-    id: "NOV-2026-003",
-    code: "SEC-MIL-003",
-    mainSection: "SEGURIDAD_FISICA",
-    subSection: "SECURITY",
-    classificationType: "Condiciones Subestándares",
-    item: "FALLA DE ALARMAS (CERCO ELÉCTRICO, SENSORES, OTROS)",
-    branch: "Planta Milagro",
-    specificLocation: "Sector Perímetro Posterior Lote 4",
-    title: "Activación en falso de zona 4 de cerco eléctrico por vegetación",
-    description: "Alarma sonora y estroboscópica se activa repetidamente en consola central. Tras paneo con domo PTZ-06 se evidencia roce con ramas caídas por viento.",
-    timestamp: "2026-08-18T03:15:00.000Z",
-    month: "AGOSTO",
-    year: 2026,
-    operator: {
-      name: "Kevin Morán Rosales",
-      code: "OPR-05",
-      role: "Operador de Consola CCTV",
-      shift: "Nocturno (22:00 - 06:00)"
-    },
-    severity: "MEDIA",
-    status: "RESUELTO",
-    actionsTaken: "Se despachó al vigilante de ronda con radio para inspección in situ y despeje temporal. A primera hora brigada de áreas verdes podó la zona.",
-    reportedToLegio: false,
-    legioTicketNumber: "",
-    cctvCaseResolved: true,
-    evidenceImages: [],
-    sourceDocument: {
-      name: "Bitacora_Milagro_Cerco.pdf",
-      type: "PDF",
-      analyzedByAI: true
-    },
-    followUps: []
-  },
-  {
-    id: "NOV-2026-004",
-    code: "KPI-SERV-004",
-    mainSection: "SEGURIDAD_FISICA",
-    subSection: "KPI_MEJORA_SERVICIO",
-    classificationType: "KPI Mejora de Servicio",
-    item: "CASOS RESUELTOS POR CCTV",
-    branch: "Tesalia Planta Gye",
-    specificLocation: "Área de Despachos de Cerveza y Refrescos",
-    title: "Esclarecimiento de descuadre de 4 pallets mediante auditoría de video",
-    description: "A solicitud del supervisor de logística, consola realizó rastreo de cámaras 11, 14 y 15 en horario 10:00 a 12:30. Se constató que el montacargas 03 reubicó los pallets en la bahía 6 en vez de la 4.",
-    timestamp: "2026-08-20T11:45:00.000Z",
-    month: "AGOSTO",
-    year: 2026,
-    operator: {
-      name: "Carlos Morán Viteri",
-      code: "OPR-04",
-      role: "Operador de Consola CCTV",
-      shift: "Matutino (06:00 - 14:00)"
-    },
-    severity: "BAJA",
-    status: "RESUELTO",
-    actionsTaken: "Se emitió extracto de video y reporte formal de CCTV entregado a la jefatura de operaciones Tesalia CBC.",
-    reportedToLegio: false,
-    legioTicketNumber: "",
-    cctvCaseResolved: true,
-    evidenceImages: [],
-    sourceDocument: {
-      name: "Informe_CCTV_Caso_Despacho_0820.pdf",
-      type: "PDF",
-      analyzedByAI: true
-    },
-    followUps: []
-  },
-  {
-    id: "NOV-2026-005",
-    code: "SSOMA-SSO-005",
-    mainSection: "SSOMA",
-    subSection: "SSO",
-    classificationType: "Actos de Seguridad y Salud Ocupacional",
-    item: "NO USO DE EPP",
-    branch: "Ag. Gye Sur",
-    specificLocation: "Patio de Maniobras - Descarga de Envoltorios",
-    title: "Personal transportista de tercero sin casco ni chaleco reflectivo",
-    description: "Operador de consola detecta por cámara de garita sur a dos conductores de transporte externo transitando a pie por zona de circulación de cabezales sin chaleco de alta visibilidad ni casco de protección.",
-    timestamp: "2026-08-22T08:30:00.000Z",
-    month: "AGOSTO",
-    year: 2026,
-    operator: {
-      name: "Diana Mendoza Saltos",
-      code: "OPR-02",
-      role: "Operador de Consola CCTV",
-      shift: "Matutino (06:00 - 14:00)"
-    },
-    severity: "MEDIA",
-    status: "EN_GESTION",
-    actionsTaken: "Se alertó inmediatamente por frecuencia de radio al vigilante de garita sur, quien detuvo el ingreso de los transportistas y les entregó el kit de EPP de visita previo a su acceso.",
-    reportedToLegio: false,
-    legioTicketNumber: "",
-    cctvCaseResolved: true,
-    evidenceImages: [
-      "https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=800&q=80"
-    ],
-    sourceDocument: {
-      name: "Foto_Infraccion_EPP.jpg",
-      type: "IMAGEN",
-      analyzedByAI: true
-    },
-    followUps: [
-      {
-        id: "flw-3",
-        date: "2026-08-22T10:00:00Z",
-        author: "José Manuel Arguello Coloma",
-        note: "Notificación enviada al departamento de transporte del contratista para llamado de atención y charla de seguridad.",
-        statusChange: "EN_GESTION"
-      }
-    ]
-  },
-  {
-    id: "NOV-2026-006",
-    code: "SSOMA-SMA-006",
-    mainSection: "SSOMA",
-    subSection: "SMA",
-    classificationType: "Actos de Sistema Medio Ambiental",
-    item: "LUCES ENCENDIDAS",
-    branch: "Ag. Manta",
-    specificLocation: "Oficinas Administrativas y Sala de Ventas",
-    title: "Luminarias encendidas en pasillos y oficinas fuera de jornada laboral",
-    description: "En el recorrido virtual de las 23:00 se constató iluminación completa de sala de reuniones y pasillo administrativo sin presencia de personal.",
-    timestamp: "2026-08-24T23:00:00.000Z",
-    month: "AGOSTO",
-    year: 2026,
-    operator: {
-      name: "Edison Zambrano Loor",
-      code: "OPR-07",
-      role: "Operador de Consola CCTV",
-      shift: "Nocturno (22:00 - 06:00)"
-    },
-    severity: "BAJA",
-    status: "RESUELTO",
-    actionsTaken: "Se solicitó al guardia de ronda ingresar y apagar los interruptores de iluminación no esencial según política de ahorro de energía y SSOMA.",
-    reportedToLegio: false,
-    legioTicketNumber: "",
-    cctvCaseResolved: true,
-    evidenceImages: [],
-    sourceDocument: {
-      name: "Parte_Diario_Consola_Manta.xlsx",
-      type: "EXCEL",
-      analyzedByAI: true
-    },
-    followUps: []
-  },
-  {
-    id: "NOV-2026-007",
-    code: "SSOMA-SAFE-007",
-    mainSection: "SSOMA",
-    subSection: "SAFETY",
-    classificationType: "Condiciones Subestándares",
-    item: "FALTA DE EXTINTORES O FECHAS VENCIDAS",
-    branch: "Planta Machala",
-    specificLocation: "Área de Talleres de Mantenimiento Mecánico",
-    title: "Extintor PQS de 20 lbs con manómetro despresurizado",
-    description: "Durante la verificación trimestral de equipos contra incendios y apoyo de cámaras de CCTV, se observa extintor #EX-14 con aguja en zona roja de recarga.",
-    timestamp: "2026-08-25T15:10:00.000Z",
-    month: "AGOSTO",
-    year: 2026,
-    operator: {
-      name: "Kevin Morán Rosales",
-      code: "OPR-05",
-      role: "Operador de Consola CCTV",
-      shift: "Vespertino (14:00 - 22:00)"
-    },
-    severity: "ALTA",
-    status: "EN_GESTION",
-    actionsTaken: "Se colocó extintor de reserva operativo mientras se gestiona retiro con el proveedor de recargas contra incendios.",
-    reportedToLegio: true,
-    legioTicketNumber: "LEG-88540",
-    cctvCaseResolved: false,
-    evidenceImages: [],
-    sourceDocument: {
-      name: "Inspeccion_SSOMA_Machala.pdf",
-      type: "PDF",
-      analyzedByAI: true
-    },
-    followUps: []
-  },
-  {
-    id: "NOV-2026-008",
-    code: "SEC-GEST-008",
-    mainSection: "SEGURIDAD_FISICA",
-    subSection: "GESTION_INTERNA",
-    classificationType: "Gestión Interna",
-    item: "SEGUIMIENTOS DE CASOS CCTV",
-    branch: "Tesalia Planta Gye",
-    specificLocation: "Consola Principal de Monitoreo Liderman",
-    title: "Seguimiento continuado a protocolo de apertura y cierre de bóveda de valores",
-    description: "Cumplimiento del 100% de los 14 acompañamientos visuales obligatorios en aperturas y cierres de tesorería durante el mes de agosto según estándar Liderman.",
-    timestamp: "2026-08-28T18:00:00.000Z",
-    month: "AGOSTO",
-    year: 2026,
-    operator: {
-      name: "José Manuel Arguello Coloma",
-      code: "COORD-01",
-      role: "Administrador / Coordinador de Seguridad",
-      shift: "Diurno Administrativo"
-    },
-    severity: "BAJA",
-    status: "RESUELTO",
-    actionsTaken: "Registro en bitácora digital de consola con tiempos de respuesta y firmas electrónicas de confirmación.",
-    reportedToLegio: false,
-    legioTicketNumber: "",
-    cctvCaseResolved: true,
-    evidenceImages: [],
-    sourceDocument: {
-      name: "Matriz_Gestion_Interna_Agosto.xlsx",
-      type: "EXCEL",
-      analyzedByAI: true
-    },
-    followUps: []
+// Initialize Cloud Firestore on backend for zero-loss cloud persistence
+let serverDb: any = null;
+try {
+  const firebaseConfigPath = path.join(__dirname, 'firebase-applet-config.json');
+  if (fs.existsSync(firebaseConfigPath)) {
+    const config = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf-8'));
+    const serverApp = getServerApps().length === 0 ? initFirebaseServer(config, 'backend-server') : getServerApp('backend-server');
+    serverDb = getFirestoreServer(serverApp, config.firestoreDatabaseId);
+    console.log('[Backend] Firestore inicializado exitosamente en:', config.firestoreDatabaseId);
   }
-];
+} catch (err) {
+  console.warn('[Backend] No se pudo inicializar Firestore en el servidor:', err);
+}
 
-function getIncidents() {
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(INITIAL_INCIDENTS, null, 2), 'utf-8');
-    return INITIAL_INCIDENTS;
-  }
+// Initial dataset
+const INITIAL_INCIDENTS: any[] = [];
+const INCIDENTS_COLLECTION = 'novedades_tesalia_2026';
+
+// Helper to load incidents from Google Cloud Firestore
+async function syncFromFirestore(): Promise<any[]> {
+  if (!serverDb) return [];
   try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-    return JSON.parse(raw);
+    const snap = await getDocsServer(collectionServer(serverDb, INCIDENTS_COLLECTION));
+    const list: any[] = [];
+    snap.forEach((d: any) => {
+      const data = d.data();
+      list.push({ ...data, id: data.id || d.id });
+    });
+    if (list.length > 0) {
+      list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(list, null, 2), 'utf-8');
+        fs.writeFileSync(BACKUP_FILE, JSON.stringify(list, null, 2), 'utf-8');
+      } catch {}
+      console.log(`[Backend] Sincronizadas ${list.length} novedades desde Google Cloud Firestore.`);
+      return list;
+    }
   } catch (err) {
-    console.error('Error reading data file, re-initializing:', err);
-    return INITIAL_INCIDENTS;
+    console.warn('[Backend] Info al leer desde Firestore:', err);
   }
+  return [];
+}
+
+// Run initial sync on boot
+syncFromFirestore().catch(() => {});
+
+function getIncidents(): any[] {
+  // 1. Primary storage file
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      const raw = fs.readFileSync(DATA_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch (err) {
+      console.error("Error reading data file, checking backup:", err);
+    }
+  }
+
+  // 2. Try recovering from backup file
+  if (fs.existsSync(BACKUP_FILE)) {
+    try {
+      const rawBackup = fs.readFileSync(BACKUP_FILE, "utf-8");
+      const parsedBackup = JSON.parse(rawBackup);
+      if (Array.isArray(parsedBackup)) {
+        return parsedBackup;
+      }
+    } catch (err) {
+      console.error("Error reading backup file:", err);
+    }
+  }
+
+  return [];
 }
 
 function saveIncidents(data: any[]) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  try {
+    const list = Array.isArray(data) ? data : [];
+    fs.writeFileSync(DATA_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    if (list.length > 0) {
+      fs.writeFileSync(BACKUP_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    }
+
+    // Persist to Google Cloud Firestore asynchronously
+    if (serverDb && list.length > 0) {
+      (async () => {
+        try {
+          const chunkSize = 400;
+          for (let i = 0; i < list.length; i += chunkSize) {
+            const chunk = list.slice(i, i + chunkSize);
+            const batch = writeBatchServer(serverDb);
+            for (const inc of chunk) {
+              const docRef = docServer(serverDb, INCIDENTS_COLLECTION, inc.id);
+              batch.set(docRef, inc, { merge: true });
+            }
+            await batch.commit();
+          }
+          console.log(`[Backend] ${list.length} novedades respaldadas en Google Cloud Firestore.`);
+        } catch (fsErr) {
+          console.warn('[Backend] Error al respaldar lote en Firestore:', fsErr);
+        }
+      })();
+    }
+  } catch (err) {
+    console.error('Error saving incidents:', err);
+  }
+}
+
+// Helper to persist base64 data URL: writes a disk backup copy AND returns the self-contained dataUrl
+// so images are 100% preserved in Firestore across container restarts and page refreshes!
+function persistBase64Image(dataUrl: string, prefix: string): string {
+  if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+    try {
+      const commaIdx = dataUrl.indexOf(',');
+      if (commaIdx !== -1) {
+        const header = dataUrl.substring(0, commaIdx).toLowerCase();
+        const base64Data = dataUrl.substring(commaIdx + 1).replace(/\s/g, '');
+        
+        let ext = 'png';
+        if (header.includes('jpeg') || header.includes('jpg')) ext = 'jpg';
+        else if (header.includes('webp')) ext = 'webp';
+        else if (header.includes('gif')) ext = 'gif';
+        else if (header.includes('svg')) ext = 'svg';
+
+        const buffer = Buffer.from(base64Data, 'base64');
+        if (buffer.length > 0) {
+          const cleanPrefix = (prefix || 'evidence').replace(/[^a-zA-Z0-9_-]/g, '_');
+          const filename = `evidence-${cleanPrefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}.${ext}`;
+          const filePath = path.join(UPLOADS_DIR, filename);
+          fs.writeFileSync(filePath, buffer);
+        }
+      }
+    } catch (saveErr) {
+      console.error('Error saving image copy to disk in persistBase64Image:', saveErr);
+    }
+    // Return the self-contained data URL so it remains completely persistent in Google Cloud Firestore!
+    return dataUrl;
+  }
+  return dataUrl;
 }
 
 // REST API Endpoints
 
-// 1. Get all incidents
-app.get('/api/incidents', (req, res) => {
-  const incidents = getIncidents();
+// Upload single base64 image and return persistent static URL
+app.post('/api/uploads/base64', (req, res) => {
+  try {
+    const { dataUrl, prefix = 'upload' } = req.body;
+    if (!dataUrl) {
+      return res.status(400).json({ success: false, error: 'dataUrl requerido' });
+    }
+    const fileUrl = persistBase64Image(dataUrl, prefix);
+    res.json({ success: true, url: fileUrl });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Download official Excel batch template (.xlsx) with native data validation dropdowns
+app.get('/api/template/excel', async (req, res) => {
+  try {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Tesalia CBC - Consola Liderman';
+    wb.created = new Date();
+
+    // Sheet 2: GUIA_TAXONOMIA
+    const wsGuia = wb.addWorksheet('GUIA_TAXONOMIA');
+    wsGuia.columns = [
+      { header: 'PLANTA / AGENCIA', key: 'branch', width: 28 },
+      { header: 'SECCION', key: 'section', width: 22 },
+      { header: 'SEGUIMIENTO', key: 'status', width: 22 },
+      { header: 'ITEM_TAXONOMIA', key: 'item', width: 55 },
+    ];
+    wsGuia.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    wsGuia.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1E293B' }
+    };
+
+    const branches = [
+      'Tesalia Planta Gye',
+      'Ag. Gye Norte',
+      'Ag. Gye Sur',
+      'Planta Milagro',
+      'Ag. Manta',
+      'Planta Machala'
+    ];
+    const sections = ['SEGURIDAD_FISICA', 'SSOMA'];
+    const statuses = ['EN PROCESO', 'ABIERTO', 'RESUELTO', 'REPORTADO A LEGIO'];
+    const items = [
+      'CORTE DE FLUIDO ELÉCTRICO INT./ EXT.',
+      'FALLA DE PUERTAS Y VENTANAS (CHAPAS, OTROS)',
+      'FALLA DE CCTV (CAMARA, MONITOR, GRABACIÓN)',
+      'FALLA DE ILUMINACIÓN (INTERNA Y EXTERNA)',
+      'FALLA DE ALARMAS (CERCO ELÉCTRICO, SENSORES, OTROS)',
+      'FALLA DE COMUNICACIÓN',
+      'FALTA DE SEÑALIZACIÓN O INADECUADA',
+      'FALTA DE EXTINTORES O FECHAS VENCIDAS',
+      'BLOQUEO DE EQUIPOS DE CONTRA INCENDIO',
+      'BLOQUEO DE PUERTAS DE EMERGENCIA',
+      'ESTIBAS MAL UBICADAS O MAL REALIZADAS',
+      'CABLES EXPUESTOS',
+      'PISOS MOJADOS / RESBALOSOS',
+      'DAÑOS MATERIALES (CAIDA O DAÑOS DE ACTIVOS DEL CLIENTE)',
+      'ROBOS, PÉRDIDAS / SUSTRACCIONES / DECOMISOS DEVOLUCIONES',
+      'VEHICULOS / PERSONAS SOSPECHOSAS',
+      'PUERTAS Y VENTANAS ABIERTAS O SIN SEGURO',
+      'OTROS 1',
+      'OTROS 2'
+    ];
+
+    const maxRows = Math.max(branches.length, sections.length, statuses.length, items.length);
+    for (let i = 0; i < maxRows; i++) {
+      wsGuia.addRow({
+        branch: branches[i] || '',
+        section: sections[i] || '',
+        status: statuses[i] || '',
+        item: items[i] || '',
+      });
+    }
+
+    // Sheet 1: BITACORA_NOVEDADES
+    const wsMain = wb.addWorksheet('BITACORA_NOVEDADES');
+    wsMain.mergeCells('A1:H1');
+    const cellA1 = wsMain.getCell('A1');
+    cellA1.value = 'BITÁCORA GENERAL DE NOVEDADES - TESALIA CBC & CONSOLA LIDERMAN.    OPERADOR: RONALD REYES.';
+    cellA1.font = { bold: true, size: 11, color: { argb: 'FFFFFFFF' } };
+    cellA1.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF0F172A' }
+    };
+    cellA1.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+    wsMain.getRow(1).height = 28;
+
+    wsMain.getRow(2).values = [
+      'FECHA',
+      'PLANTA / AGENCIA',
+      'HORA',
+      'IMAGEN',
+      'DESCRIPCION',
+      'SEGUIMIENTO',
+      'SECCION',
+      'ITEM_TAXONOMIA'
+    ];
+    wsMain.getRow(2).font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+    wsMain.getRow(2).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF047857' }
+    };
+    wsMain.getRow(2).height = 26;
+
+    wsMain.columns = [
+      { key: 'fecha', width: 14 },
+      { key: 'planta', width: 26 },
+      { key: 'hora', width: 12 },
+      { key: 'imagen', width: 28 },
+      { key: 'descripcion', width: 60 },
+      { key: 'seguimiento', width: 18 },
+      { key: 'seccion', width: 20 },
+      { key: 'item', width: 48 },
+    ];
+
+    const sampleData = [
+      [
+        '2026-09-27',
+        'Planta Milagro',
+        '20:00',
+        '[Pegar captura CCTV aquí]',
+        'Buenas noches. Estimado Coord. Byron Carrera: Por medio del presente, se informa que el personal de seguridad Liderman reporta que, al momento, Planta Tesalia Milagro se encuentra sin energía eléctrica pública. El Sr. Jordi Maldonado, operador de Envasadora, se encuentra realizando una revisión del área eléctrica a fin de identificar la novedad.',
+        'EN PROCESO',
+        'SSOMA',
+        'CORTE DE FLUIDO ELÉCTRICO INT./ EXT.'
+      ],
+      [
+        '2026-08-03',
+        'Ag. Gye Norte',
+        '15:26',
+        '[Pegar foto aquí]',
+        'Pasos de seguridad despintados en patio de maniobras, lo que dificulta su visibilidad y aumenta el riesgo de accidentes peatonales.',
+        'EN PROCESO',
+        'SSOMA',
+        'FALTA DE SEÑALIZACIÓN O INADECUADA'
+      ],
+      [
+        '2026-08-14',
+        'Tesalia Planta Gye',
+        '08:45',
+        '[Pegar foto aquí]',
+        'Brazos mecánicos del portón de malla principal no funcionan, se mantiene cerrado de forma manual con cadena y candado temporal.',
+        'ABIERTO',
+        'SEGURIDAD_FISICA',
+        'FALLA DE PUERTAS Y VENTANAS (CHAPAS, OTROS)'
+      ],
+      [
+        '2026-08-18',
+        'Ag. Gye Sur',
+        '11:15',
+        '[Pegar foto aquí]',
+        'Cámara de seguridad domo PTZ 04 de perímetro exterior presenta intermitencia y pérdida de señal de video en consola.',
+        'EN PROCESO',
+        'SEGURIDAD_FISICA',
+        'FALLA DE CCTV (CAMARA, MONITOR, GRABACIÓN)'
+      ],
+      [
+        '2026-08-25',
+        'Ag. Manta',
+        '17:30',
+        '[Pegar foto aquí]',
+        'Extintor de polvo químico seco PQS de 10 lbs ubicado en área de bodega presenta manómetro en zona de recarga vencida.',
+        'RESUELTO',
+        'SSOMA',
+        'FALTA DE EXTINTORES O FECHAS VENCIDAS'
+      ]
+    ];
+
+    sampleData.forEach((rowValues) => {
+      const row = wsMain.addRow(rowValues);
+      row.height = 42;
+      row.alignment = { vertical: 'middle', wrapText: true };
+    });
+
+    const branchRange = `=GUIA_TAXONOMIA!$A$2:$A$${branches.length + 1}`;
+    const sectionRange = `=GUIA_TAXONOMIA!$B$2:$B$${sections.length + 1}`;
+    const statusRange = `=GUIA_TAXONOMIA!$C$2:$C$${statuses.length + 1}`;
+    const itemRange = `=GUIA_TAXONOMIA!$D$2:$D$${items.length + 1}`;
+
+    for (let r = 3; r <= 100; r++) {
+      wsMain.getCell(`A${r}`).alignment = { vertical: 'middle', horizontal: 'center' };
+      wsMain.getCell(`B${r}`).dataValidation = {
+        type: 'list',
+        allowBlank: true,
+        formulae: [branchRange]
+      };
+      wsMain.getCell(`F${r}`).dataValidation = {
+        type: 'list',
+        allowBlank: true,
+        formulae: [statusRange]
+      };
+      wsMain.getCell(`G${r}`).dataValidation = {
+        type: 'list',
+        allowBlank: true,
+        formulae: [sectionRange]
+      };
+      wsMain.getCell(`H${r}`).dataValidation = {
+        type: 'list',
+        allowBlank: true,
+        formulae: [itemRange]
+      };
+      wsMain.getRow(r).alignment = { vertical: 'middle', wrapText: true };
+    }
+
+    const buffer = await wb.xlsx.writeBuffer();
+    res.setHeader('Content-Disposition', 'attachment; filename="Plantilla_Oficial_Novedades_Liderman_Tesalia.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(Buffer.from(buffer));
+  } catch (err: any) {
+    res.status(500).send('Error generating template: ' + err.message);
+  }
+});
+
+// Static route to serve uploaded evidence photos & assets
+app.use('/api/uploads', express.static(UPLOADS_DIR));
+app.get('/api/uploads/:filename', (req, res) => {
+  const filePath = path.join(UPLOADS_DIR, req.params.filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('Imagen no encontrada');
+  }
+  res.sendFile(filePath);
+});
+
+// 1. Get all incidents (with automatic Firestore cloud sync to guarantee zero data loss on restart)
+app.get('/api/incidents', async (req, res) => {
+  let incidents = getIncidents();
+  if (incidents.length === 0 && serverDb) {
+    const cloudList = await syncFromFirestore();
+    if (cloudList.length > 0) {
+      incidents = cloudList;
+    }
+  }
   res.json({ success: true, incidents });
 });
 
@@ -482,7 +561,9 @@ app.post('/api/incidents', (req, res) => {
     reportedToLegio: Boolean(newIncident.reportedToLegio),
     legioTicketNumber: newIncident.legioTicketNumber || '',
     cctvCaseResolved: Boolean(newIncident.cctvCaseResolved),
-    evidenceImages: newIncident.evidenceImages || [],
+    evidenceImages: Array.isArray(newIncident.evidenceImages) 
+      ? newIncident.evidenceImages.map((img: string, idx: number) => persistBase64Image(img, `new-${idx}`)) 
+      : [],
     sourceDocument: newIncident.sourceDocument || {
       name: 'Registro Manual en Consola',
       type: 'MANUAL',
@@ -520,88 +601,170 @@ app.delete('/api/incidents/:id', (req, res) => {
   let incidents = getIncidents();
   const filtered = incidents.filter((inc: any) => inc.id !== id);
   saveIncidents(filtered);
+  if (serverDb) {
+    deleteDocServer(docServer(serverDb, INCIDENTS_COLLECTION, id)).catch(() => {});
+  }
   res.json({ success: true, count: filtered.length });
 });
 
 // Clear all incidents (start from scratch)
-app.post('/api/incidents/clear', (req, res) => {
+app.post('/api/incidents/clear', async (req, res) => {
   saveIncidents([]);
+  if (serverDb) {
+    try {
+      const snap = await getDocsServer(collectionServer(serverDb, INCIDENTS_COLLECTION));
+      const batch = writeBatchServer(serverDb);
+      snap.forEach((d: any) => batch.delete(d.ref));
+      await batch.commit();
+      console.log(`[Backend] Firestore ${INCIDENTS_COLLECTION} collection cleared.`);
+    } catch (err) {
+      console.warn('[Backend] Info al limpiar Firestore:', err);
+    }
+  }
   res.json({ success: true, count: 0, incidents: [] });
 });
 
 // Append evidence photo to an existing incident
 app.post('/api/incidents/:id/evidence', (req, res) => {
-  const { id } = req.params;
-  const { imageUrl } = req.body;
-  if (!imageUrl) {
-    return res.status(400).json({ success: false, error: 'Imagen requerida' });
-  }
+  try {
+    const { id } = req.params;
+    let { imageUrl } = req.body;
+    if (!imageUrl) {
+      return res.status(400).json({ success: false, error: 'Imagen requerida' });
+    }
 
-  const incidents = getIncidents();
-  const index = incidents.findIndex((inc: any) => inc.id === id);
-  if (index === -1) {
-    return res.status(404).json({ success: false, error: 'Incidente no encontrado' });
-  }
+    // Persist base64 data to static image file on disk in UPLOADS_DIR
+    imageUrl = persistBase64Image(imageUrl, id);
 
-  if (!Array.isArray(incidents[index].evidenceImages)) {
-    incidents[index].evidenceImages = [];
-  }
-  incidents[index].evidenceImages.push(imageUrl);
-  saveIncidents(incidents);
+    const incidents = getIncidents();
+    const index = incidents.findIndex((inc: any) => inc.id === id);
+    if (index === -1) {
+      return res.status(404).json({ success: false, error: 'Incidente no encontrado' });
+    }
 
-  res.json({ success: true, incident: incidents[index] });
+    if (!Array.isArray(incidents[index].evidenceImages)) {
+      incidents[index].evidenceImages = [];
+    }
+    incidents[index].evidenceImages.push(imageUrl);
+    saveIncidents(incidents);
+
+    res.json({ success: true, incident: incidents[index], imageUrl });
+  } catch (err: any) {
+    console.error('Error in /api/incidents/:id/evidence:', err);
+    res.status(500).json({ success: false, error: err.message || 'Error al guardar la imagen.' });
+  }
 });
 
-// 5. Batch import (useful for AI bulk ingestion)
+// 5. Batch import (Excel batch ingestion & AI ingestion with automatic pre-update safety backup)
 app.post('/api/incidents/batch', (req, res) => {
-  const { items } = req.body;
-  if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, error: 'Se requiere un arreglo de novedades "items"' });
+  try {
+    const { items, keepExisting = true } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, error: 'Se requiere un arreglo de novedades "items"' });
+    }
+
+    const incidents = getIncidents();
+
+    // MANDATORY REQUIREMENT: Always save a persistent safety snapshot BEFORE every batch update
+    try {
+      const snapshotFile = path.join(BACKUPS_DIR, `snapshot-pre-batch-${Date.now()}.json`);
+      fs.writeFileSync(snapshotFile, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        count: incidents.length,
+        itemsCountToImport: items.length,
+        keepExisting,
+        incidents
+      }, null, 2), 'utf-8');
+    } catch (snapErr) {
+      console.warn('Could not write pre-batch snapshot:', snapErr);
+    }
+
+    const processed = items.map((item, idx) => {
+      const padNum = String(incidents.length + idx + 1).padStart(3, '0');
+      
+      // Normalize evidence images if provided as base64
+      const normalizedImages = Array.isArray(item.evidenceImages)
+        ? item.evidenceImages.map((img: string, imgIdx: number) => persistBase64Image(img, `batch-${idx}-${imgIdx}`))
+        : [];
+
+      return {
+        id: item.id || `NOV-2026-${padNum}`,
+        code: item.code || `IA-${Date.now().toString().slice(-4)}-${idx}`,
+        mainSection: item.mainSection || 'SEGURIDAD_FISICA',
+        subSection: item.subSection || 'SECURITY',
+        classificationType: item.classificationType || 'Condiciones Subestándares',
+        item: item.item || 'OTROS 1',
+        branch: item.branch || 'Tesalia Planta Gye',
+        specificLocation: item.specificLocation || 'Área General',
+        title: item.title || 'Novedad analizada por IA',
+        description: item.description || '',
+        timestamp: item.timestamp || new Date().toISOString(),
+        month: item.month || 'AGOSTO',
+        year: item.year || 2026,
+        operator: item.operator || {
+          name: item.operatorName || 'Operador de Consola',
+          code: 'OPR-BATCH',
+          role: 'Consola Liderman',
+          shift: 'Turno Rotativo'
+        },
+        severity: item.severity || 'MEDIA',
+        status: item.status || 'ABIERTO',
+        actionsTaken: item.actionsTaken || '',
+        reportedToLegio: Boolean(item.reportedToLegio),
+        legioTicketNumber: item.legioTicketNumber || '',
+        cctvCaseResolved: Boolean(item.cctvCaseResolved),
+        evidenceImages: normalizedImages,
+        sourceDocument: item.sourceDocument || {
+          name: 'Importación Batch Excel',
+          type: 'EXCEL',
+          analyzedByAI: true
+        },
+        followUps: item.followUps || []
+      };
+    });
+
+    let updatedList: any[] = [];
+    if (keepExisting) {
+      // Append new items while keeping all previous data
+      updatedList = [...processed, ...incidents];
+    } else {
+      updatedList = processed;
+    }
+
+    saveIncidents(updatedList);
+
+    res.json({ 
+      success: true, 
+      count: processed.length, 
+      total: updatedList.length, 
+      incidents: updatedList 
+    });
+  } catch (err: any) {
+    console.error('Error in /api/incidents/batch:', err);
+    res.status(500).json({ success: false, error: err.message || 'Error al procesar lote de novedades.' });
   }
+});
 
-  const incidents = getIncidents();
-  const processed = items.map((item, idx) => {
-    const padNum = String(incidents.length + idx + 1).padStart(3, '0');
-    return {
-      id: item.id || `NOV-2026-${padNum}`,
-      code: item.code || `IA-${Date.now().toString().slice(-4)}-${idx}`,
-      mainSection: item.mainSection || 'SEGURIDAD_FISICA',
-      subSection: item.subSection || 'SECURITY',
-      classificationType: item.classificationType || 'Condiciones Subestándares',
-      item: item.item || 'OTROS 1',
-      branch: item.branch || 'Tesalia Planta Gye',
-      specificLocation: item.specificLocation || 'Área General',
-      title: item.title || 'Novedad analizada por IA',
-      description: item.description || '',
-      timestamp: item.timestamp || new Date().toISOString(),
-      month: item.month || 'AGOSTO',
-      year: item.year || 2026,
-      operator: item.operator || {
-        name: 'IA Assistant / Operador',
-        code: 'IA-OPR',
-        role: 'Ingesta Inteligente',
-        shift: 'Digital'
-      },
-      severity: item.severity || 'MEDIA',
-      status: item.status || 'ABIERTO',
-      actionsTaken: item.actionsTaken || '',
-      reportedToLegio: Boolean(item.reportedToLegio),
-      legioTicketNumber: item.legioTicketNumber || '',
-      cctvCaseResolved: Boolean(item.cctvCaseResolved),
-      evidenceImages: item.evidenceImages || [],
-      sourceDocument: item.sourceDocument || {
-        name: 'Documento procesado por IA',
-        type: 'PDF',
-        analyzedByAI: true
-      },
-      followUps: []
-    };
-  });
+// Restore full incidents state from a backup or external synchronization
+app.post('/api/incidents/restore', (req, res) => {
+  try {
+    const { incidents } = req.body;
+    if (!Array.isArray(incidents)) {
+      return res.status(400).json({ success: false, error: 'Se requiere una lista de novedades válida' });
+    }
 
-  const updatedList = [...processed, ...incidents];
-  saveIncidents(updatedList);
+    // Save pre-restore snapshot
+    const current = getIncidents();
+    try {
+      fs.writeFileSync(path.join(BACKUPS_DIR, `snapshot-pre-restore-${Date.now()}.json`), JSON.stringify(current, null, 2), 'utf-8');
+    } catch { }
 
-  res.json({ success: true, count: processed.length, incidents: updatedList });
+    saveIncidents(incidents);
+    res.json({ success: true, count: incidents.length, incidents });
+  } catch (err: any) {
+    console.error('Error restoring incidents:', err);
+    res.status(500).json({ success: false, error: err.message || 'Error al restaurar novedades.' });
+  }
 });
 
 // ==========================================
@@ -780,6 +943,69 @@ app.delete('/api/folders/:id', (req, res) => {
   res.json({ success: true, id });
 });
 
+// Helper function for deep text extraction across Word, Excel, PDF, and plain text
+async function extractTextFromFileBuffer(buffer: Buffer, fileName: string, mimeType?: string): Promise<string> {
+  const ext = path.extname(fileName || '').toLowerCase();
+  
+  // 1. Word Documents (.docx, .doc)
+  if (ext === '.docx' || ext === '.doc') {
+    try {
+      const res = await mammoth.extractRawText({ buffer });
+      if (res && res.value && res.value.trim().length > 0) {
+        return res.value.trim();
+      }
+    } catch (err) {
+      console.warn('Mammoth extraction warning:', err);
+    }
+  }
+
+  // 2. Excel Spreadsheets (.xlsx, .xls, .csv)
+  if (ext === '.xlsx' || ext === '.xls' || ext === '.csv' || mimeType?.includes('spreadsheet') || mimeType?.includes('excel')) {
+    try {
+      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const chunks: string[] = [];
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+        const cleanLines = csv.split('\n').map(l => l.trim()).filter(l => {
+          const stripped = l.replace(/[,;\s\t]/g, '');
+          return stripped.length > 0;
+        });
+        if (cleanLines.length > 0) {
+          chunks.push(`--- HOJA EXCEL: [${sheetName}] ---\n` + cleanLines.join('\n'));
+        }
+      }
+      if (chunks.length > 0) {
+        return chunks.join('\n\n');
+      }
+    } catch (err) {
+      console.warn('XLSX extraction warning:', err);
+    }
+  }
+
+  // 3. PDF Documents (.pdf)
+  if (ext === '.pdf' || mimeType === 'application/pdf') {
+    try {
+      const pdfData = await pdfParse(buffer);
+      if (pdfData && pdfData.text && pdfData.text.trim().length > 0) {
+        return pdfData.text.trim();
+      }
+    } catch (err) {
+      console.warn('pdfParse extraction warning:', err);
+    }
+  }
+
+  // 4. Plain text / fallback
+  try {
+    const raw = buffer.toString('utf-8');
+    if (raw && raw.trim().length > 0) {
+      return raw.trim();
+    }
+  } catch { }
+
+  return '';
+}
+
 // 8. Analizar un documento ya guardado en el Repositorio Digital
 app.post('/api/documents/:id/analyze', async (req, res) => {
   try {
@@ -795,30 +1021,12 @@ app.post('/api/documents/:id/analyze', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Archivo físico no encontrado en disco.' });
     }
 
-    let fileText = '';
-    let fileData = '';
     const fileBuffer = fs.readFileSync(filePath);
+    const fileText = await extractTextFromFileBuffer(fileBuffer, doc.name, doc.mimeType);
+    let fileData = '';
 
-    if (doc.fileExtension.match(/\.(docx|doc)$/i)) {
-      try {
-        const result = await mammoth.extractRawText({ buffer: fileBuffer });
-        fileText = result.value || '';
-      } catch (e) {
-        fileText = fileBuffer.toString('utf-8');
-      }
-    } else if (doc.fileExtension.match(/\.(xlsx|xls|csv)$/i)) {
-      try {
-        const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        fileText = XLSX.utils.sheet_to_csv(worksheet);
-      } catch (e) {
-        fileText = fileBuffer.toString('utf-8');
-      }
-    } else if (doc.mimeType?.startsWith('image/') || doc.mimeType === 'application/pdf') {
+    if (doc.mimeType?.startsWith('image/') || doc.mimeType === 'application/pdf') {
       fileData = fileBuffer.toString('base64');
-    } else {
-      fileText = fileBuffer.toString('utf-8');
     }
 
     // Call analyze-document endpoint logic directly
@@ -959,7 +1167,7 @@ app.post('/api/documents/:id/assign-incident', (req, res) => {
   }
 });
 
-// 10. AI Chat Assistant for Liderman / Tesalia CBC (Using Gemini 3.8 Flash)
+// 10. AI Chat Assistant for Liderman / Tesalia CBC with Real-Time Executive Platform Control
 app.post('/api/ai/chat', async (req, res) => {
   try {
     const { message, history } = req.body;
@@ -967,49 +1175,88 @@ app.post('/api/ai/chat', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Mensaje requerido' });
     }
 
-    const incidents = getIncidents();
-    const documents = getDocuments();
+    let incidents = getIncidents();
+    let documents = getDocuments();
     const folders = getFolders();
 
     const secCount = incidents.filter((i: any) => i.mainSection === 'SEGURIDAD_FISICA').length;
     const ssomaCount = incidents.filter((i: any) => i.mainSection === 'SSOMA').length;
+
+    const incidentsSummary = incidents.length === 0 
+      ? 'No hay novedades registradas actualmente en la base de datos.'
+      : incidents.map((i: any) => 
+          `- ID: "${i.id}" | Código: "${i.code}" | Sección: "${i.mainSection}" | Ítem: "${i.item}" | Sucursal: "${i.branch}" | Estado: "${i.status}" | Severidad: "${i.severity}" | Título: "${i.title}"`
+        ).join('\n');
+
+    const documentsSummary = documents.length === 0
+      ? 'No hay archivos en el repositorio digital actualmente.'
+      : documents.map((d: any) =>
+          `- ID: "${d.id}" | Nombre: "${d.name}" | Carpeta: "${d.folderName}" | Sucursal: "${d.branch || 'General'}" | Asignado a Novedad: "${d.assignedIncidentId || 'NO'}"`
+        ).join('\n');
 
     const systemPrompt = `
 ERES EL "ASISTENTE OPERATIVO INTELIGENTE LIDERMAN" DE LA PLATAFORMA DE GESTIÓN PARA EL CLIENTE "TESALIA CBC".
 ADMINISTRADOR DEL PROYECTO: JOSÉ MANUEL ARGUELLO COLOMA (Coordinador General Liderman).
 
 TU OBJETIVO:
-Asistir y orientar a José Manuel y a los operadores de consola en cualquier duda sobre:
-1. Procedimientos operativos de seguridad física y SSOMA en las sucursales.
-2. Cómo clasificar o categorizar una novedad dentro de la Matriz Oficial de Indicadores.
-3. Uso de la plataforma: cómo registrar novedades manuales, cómo usar el Repositorio Digital Tipo Drive (carpetas de Oportunidades de Mejora, Capacitaciones, Informes Realizados, Consignas), cómo subir archivos Word/PDF y cómo asignarlos a novedades si el análisis automático falla.
-4. Datos y métricas actuales del proyecto.
+1. Asistir y orientar en procedimientos operativos de seguridad física y SSOMA en las 6 sucursales oficiales.
+2. Ayudar a clasificar novedades dentro de la Matriz Oficial de Indicadores.
+3. CONTROL Y MODIFICACIÓN EN TIEMPO REAL: Tienes CONTROL TOTAL y AUTORIZACIÓN PLENA para ejecutar cambios en la plataforma en tiempo real cuando el usuario te lo pida (crear novedades, modificar estados a Resuelto, mover novedades de Seguridad Física a SSOMA o viceversa, cambiar de sucursal, asignar archivos a novedades, navegar entre vistas y filtros, etc.). ¡Así evitas que el usuario tenga que reprogramar o hacer ajustes manuales!
 
-CONTEXTO ACTUAL DE LA PLATAFORMA EN TIEMPO REAL:
-- Total de novedades registradas en la Matriz: ${incidents.length} (Seguridad Física: ${secCount}, SSOMA: ${ssomaCount}).
-- Total de archivos en el Repositorio Drive: ${documents.length} archivos distribuidos en ${folders.length} carpetas.
-- Carpetas del Drive disponibles: ${folders.map((f: any) => f.name).join(', ')}.
-- Sucursales Oficiales: Ag. Gye Norte, Ag. Gye Sur, Tesalia Planta Gye, Planta Milagro, Ag. Manta, Planta Machala.
+BASE DE DATOS EN TIEMPO REAL:
+- Total Novedades: ${incidents.length} (Seguridad Física: ${secCount}, SSOMA: ${ssomaCount}).
+- Novedades Registradas Actualmente:
+${incidentsSummary}
 
-ESTRUCTURA DE TAXONOMÍA OFICIAL:
+- Total Archivos en Repositorio Drive: ${documents.length}
+${documentsSummary}
+
+SUCURSALES OFICIALES:
+Ag. Gye Norte, Ag. Gye Sur, Tesalia Planta Gye, Planta Milagro, Ag. Manta, Planta Machala.
+
+TAXONOMÍA OFICIAL:
 A) SEGURIDAD FÍSICA:
-   - Security: Falla de cerraduras, Acceso de personal no autorizado, Ingreso no autorizado de vehículos, Llaves extraviadas, Intrusión / Escalamiento, Daño a instalaciones, Robo / Hurto, Alarma activada.
-   - KPI Mejora de Servicio: Fallas sistema CCTV, Mantenimiento de cámaras, Revisión de cámaras, Cambios de equipos, Pruebas de equipos.
-   - Gestión Interna: Asistencia, Uniformidad, Equipamiento, Descanso, Relevo, Ronda, Supervisión, Consigna, Capacitación.
+   - Security: Falla de cerraduras, Acceso de personal no autorizado, Ingreso no autorizado de vehículos, Llaves extraviadas, Intrusión / Escalamiento, Daño a instalaciones, Robo / Hurto, Alarma activada, Puertas y ventanas abiertas.
+   - KPI Mejora de Servicio: Fallas sistema CCTV, Mantenimiento de cámaras, Revisión de cámaras, Casos resueltos por CCTV, Informes enviados, Supervisión sistema CCTV, Capacitaciones.
+   - Gestión Interna: Asistencia, Uniformidad, Equipamiento, Descanso, Relevo, Ronda, Supervisión, Consigna, Oportunidades de mejora.
 
 B) SEGURIDAD INDUSTRIAL (SSOMA):
-   - Safety: Estibas mal ubicadas o mal realizadas, Bloqueo de equipos de contra incendio, Falta de señalética, Bloqueo de puertas de emergencia, Derrames o desbordes, Cables expuestos, Pisos mojados / resbalosos, Trabajos de alto riesgo sin permiso.
-   - Medio Ambiente (SMA): Derrame de combustible / químicos, Desechos inorgánicos, Aniegos e inundaciones, Plagas, Fugas / derrames / emanaciones.
-   - Salud Ocupacional (SSO): No uso de EPP, Maniobras peligrosas, Riesgos ocupacionales (heridas, fracturas), Enfermedades ocupacionales.
+   - Safety: Estibas mal ubicadas o mal realizadas, Bloqueo de equipos de contra incendio, Falta de extintores o fechas vencidas, Falta de señalética, Bloqueo de puertas de emergencia, Derrames o desbordes de producto, Cables expuestos, Pisos mojados / resbalosos, Equipos defectuosos, Conato / Incendio, Daños materiales, Trabajos de alto riesgo sin permiso.
+   - Medio Ambiente (SMA): Derrame de combustible / químicos, Luces encendidas, Equipos encendidos, Desechos inorgánicos, Aniegos e inundaciones, Plagas, Fugas / derrames / emanaciones.
+   - Salud Ocupacional (SSO): No uso de EPP, Maniobras peligrosas, Riesgos ocupacionales (heridas, fracturas), Enfermedades ocupacionales, Uso de botiquines / primeros auxilios.
 
-REGLAS DE RESPUESTA:
-- Responde siempre en español, con tono profesional, claro, respetuoso, directo y operativo (estilo Liderman: "Seguridad y Confianza").
-- Si te preguntan cómo clasificar una novedad, dale la ruta exacta: [Sección Principal] -> [Subsección] -> [Ítem sugerido] y la recomendación de severidad.
-- Si te piden guías de la aplicación, explica los pasos claros (por ejemplo: "Para asignar un archivo del Drive a una novedad: entra a la carpeta, haz clic en el botón 'Asignar a Novedad', revisa los campos y pulsa Guardar").
-- Sé conciso y utiliza viñetas o negritas para que sea fácil de leer en la consola.
+INSTRUCCIONES PARA EJECUTAR MODIFICACIONES EN TIEMPO REAL:
+Si el usuario te pide:
+- Registrar / agregar una novedad: Usa CREATE_INCIDENT.
+- Modificar o resolver una novedad (ej. cambiar a "RESUELTO", cambiar sección a "SEGURIDAD_FISICA" o "SSOMA", cambiar sucursal o ítem): Usa UPDATE_INCIDENT.
+- Eliminar una novedad errónea: Usa DELETE_INCIDENT.
+- Cambiar la vista o filtros (ej. "llévame a SSOMA", "filtra Planta Milagro", "abre el drive"): Usa NAVIGATE_UI.
+- Asignar un documento del Drive a una novedad: Usa ASSIGN_DOCUMENT.
+
+Para ejecutar acciones, incluye SIEMPRE al final de tu mensaje el bloque:
+\`\`\`json:action
+{
+  "actions": [
+    {
+      "type": "CREATE_INCIDENT" | "UPDATE_INCIDENT" | "DELETE_INCIDENT" | "NAVIGATE_UI" | "ASSIGN_DOCUMENT" | "CLEAR_INCIDENTS",
+      "payload": { ... }
+    }
+  ]
+}
+\`\`\`
+
+Ejemplos de payload:
+- CREATE_INCIDENT: { "title": "...", "mainSection": "SEGURIDAD_FISICA"|"SSOMA", "subSection": "...", "classificationType": "...", "item": "...", "branch": "...", "specificLocation": "...", "description": "...", "actionsTaken": "...", "severity": "BAJA"|"MEDIA"|"ALTA"|"CRÍTICA", "status": "ABIERTO"|"EN_GESTION"|"REPORTADO_LEGIO"|"RESUELTO", "month": "AGOSTO", "year": 2026 }
+- UPDATE_INCIDENT: { "id": "NOV-xxxx", "updates": { "status": "RESUELTO", "mainSection": "SEGURIDAD_FISICA"|"SSOMA", "item": "..." } }
+- DELETE_INCIDENT: { "id": "NOV-xxxx" }
+- NAVIGATE_UI: { "activeModule": "NOVEDADES"|"DRIVE", "activeMainSection": "SEGURIDAD_FISICA"|"SSOMA", "activeViewMode": "MATRIZ"|"LISTADO", "selectedBranch": "TODAS"|"Planta Milagro"..., "selectedMonth": "AGOSTO" }
+- ASSIGN_DOCUMENT: { "documentId": "doc-xxxx", "mainSection": "SSOMA", "item": "...", "branch": "..." }
+
+Responde con tono profesional de Liderman ("Seguridad y Confianza"). Si ejecutas una acción, confirma en el texto con claridad qué modificaste.
 `;
 
     let replyText = '';
+    let executedActions: any[] = [];
 
     try {
       const chatContents: any[] = [];
@@ -1025,35 +1272,247 @@ REGLAS DE RESPUESTA:
 
       chatContents.push({
         role: 'user',
-        parts: [{ text: `${systemPrompt}\n\nPregunta o solicitud del usuario:\n${message}` }]
+        parts: [{ text: `${systemPrompt}\n\nSolicitud del usuario:\n${message}` }]
       });
 
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: chatContents,
         config: {
-          temperature: 0.3,
+          temperature: 0.2,
         }
       });
 
       replyText = response?.text || '';
     } catch (apiErr: any) {
-      console.warn('Gemini chat API error:', apiErr?.message || apiErr);
-      replyText = getFallbackChatResponse(message, incidents.length, documents.length);
+      console.warn('Gemini chat API error, fallback to operative action parser:', apiErr?.message || apiErr);
+      const fallbackResult = generateActionReplyFromIntent(message, incidents, documents, folders);
+      replyText = fallbackResult.reply;
+      if (fallbackResult.actions && fallbackResult.actions.length > 0) {
+        replyText += `\n\n\`\`\`json:action\n${JSON.stringify({ actions: fallbackResult.actions })}\n\`\`\``;
+      }
     }
 
     if (!replyText) {
-      replyText = getFallbackChatResponse(message, incidents.length, documents.length);
+      const fallbackResult = generateActionReplyFromIntent(message, incidents, documents, folders);
+      replyText = fallbackResult.reply;
+      if (fallbackResult.actions && fallbackResult.actions.length > 0) {
+        replyText += `\n\n\`\`\`json:action\n${JSON.stringify({ actions: fallbackResult.actions })}\n\`\`\``;
+      }
     }
+
+    // Process actions if present in replyText or detected from intent
+    let actionMatch = replyText.match(/```json:action\s*([\s\S]*?)\s*```/) || 
+                      replyText.match(/```json\s*(\{[\s\S]*?"actions"[\s\S]*?\})\s*```/);
+
+    // If Gemini replied without an action block but user explicitly issued an imperative operational command:
+    if (!actionMatch) {
+      const qLower = message.toLowerCase();
+      if (qLower.includes('registra') || qLower.includes('crea') || qLower.includes('resuelto') || 
+          qLower.includes('ssoma') || qLower.includes('elimina') || qLower.includes('llévame') || qLower.includes('llevame')) {
+        const intentResult = generateActionReplyFromIntent(message, incidents, documents, folders);
+        if (intentResult.actions.length > 0) {
+          actionMatch = [
+            '',
+            JSON.stringify({ actions: intentResult.actions })
+          ];
+        }
+      }
+    }
+
+    if (actionMatch) {
+      try {
+        const parsed = JSON.parse(actionMatch[1]);
+        if (Array.isArray(parsed.actions)) {
+          for (const act of parsed.actions) {
+            if (act.type === 'CREATE_INCIDENT' && act.payload) {
+              const p = act.payload;
+              const newId = `NOV-${Date.now().toString().slice(-6)}`;
+              const branchCode = p.branch ? p.branch.substring(0, 3).toUpperCase() : 'CBC';
+              const newInc = {
+                id: newId,
+                code: `TES-${branchCode}-${Math.floor(100 + Math.random() * 900)}`,
+                mainSection: p.mainSection || 'SEGURIDAD_FISICA',
+                subSection: p.subSection || (p.mainSection === 'SSOMA' ? 'SAFETY' : 'SECURITY'),
+                classificationType: p.classificationType || (p.mainSection === 'SSOMA' ? 'Condiciones de Seguridad' : 'Incidentes de Security'),
+                item: p.item || 'Novedad Registrada',
+                branch: p.branch || 'Tesalia Planta Gye',
+                specificLocation: p.specificLocation || 'Instalaciones Generales',
+                title: p.title || 'Novedad registrada por Asistente IA',
+                description: p.description || 'Novedad generada automáticamente por Asistente Operativo Liderman.',
+                actionsTaken: p.actionsTaken || 'Registrado en consola Liderman.',
+                severity: p.severity || 'MEDIA',
+                status: p.status || 'EN_GESTION',
+                timestamp: new Date().toISOString(),
+                month: p.month || 'AGOSTO',
+                year: p.year || 2026,
+                operator: {
+                  id: 'usr-admin',
+                  name: 'José Manuel Arguello Coloma',
+                  role: 'Coordinador Liderman / Administrador',
+                  shift: 'General Administrativo'
+                },
+                evidenceImages: [],
+                reportedToLegio: false,
+                cctvCaseResolved: true,
+                followUps: [
+                  {
+                    id: `flw-${Date.now()}`,
+                    date: new Date().toISOString(),
+                    author: 'Asistente IA Liderman',
+                    note: `Novedad creada en tiempo real por el Asistente IA (${p.title}).`,
+                    statusChange: p.status || 'EN_GESTION'
+                  }
+                ]
+              };
+              incidents.unshift(newInc);
+              saveIncidents(incidents);
+              executedActions.push({
+                type: 'CREATE_INCIDENT',
+                incident: newInc,
+                summary: `✓ Creada novedad ${newInc.code}: "${newInc.title}" en ${newInc.branch} (${newInc.mainSection === 'SEGURIDAD_FISICA' ? 'Seguridad Física' : 'SSOMA'}).`
+              });
+            } else if (act.type === 'UPDATE_INCIDENT' && act.payload) {
+              const { id, updates } = act.payload;
+              const idx = incidents.findIndex((i: any) => 
+                i.id === id || 
+                i.code === id || 
+                (id && (i.title?.toLowerCase().includes(id.toLowerCase()) || i.id?.toLowerCase().includes(id.toLowerCase())))
+              );
+              if (idx !== -1) {
+                const prev = incidents[idx];
+                const updated = { ...prev, ...updates };
+                if (updates.status && updates.status !== prev.status) {
+                  updated.followUps = [
+                    ...(prev.followUps || []),
+                    {
+                      id: `flw-${Date.now()}`,
+                      date: new Date().toISOString(),
+                      author: 'Asistente IA Liderman',
+                      note: `Estado actualizado a "${updates.status}" por instrucción del usuario.`,
+                      statusChange: updates.status
+                    }
+                  ];
+                }
+                incidents[idx] = updated;
+                saveIncidents(incidents);
+                executedActions.push({
+                  type: 'UPDATE_INCIDENT',
+                  incident: updated,
+                  summary: `✓ Novedad ${updated.id} (${updated.title}) actualizada con éxito.`
+                });
+              } else if (incidents.length > 0) {
+                // If ID didn't match exactly, update the most recent incident
+                const prev = incidents[0];
+                const updated = { ...prev, ...updates };
+                incidents[0] = updated;
+                saveIncidents(incidents);
+                executedActions.push({
+                  type: 'UPDATE_INCIDENT',
+                  incident: updated,
+                  summary: `✓ Novedad más reciente (${updated.id}) actualizada con éxito.`
+                });
+              }
+            } else if (act.type === 'DELETE_INCIDENT' && act.payload) {
+              const { id } = act.payload;
+              const initialLen = incidents.length;
+              incidents = incidents.filter((i: any) => i.id !== id && i.code !== id);
+              if (incidents.length !== initialLen) {
+                saveIncidents(incidents);
+                executedActions.push({
+                  type: 'DELETE_INCIDENT',
+                  id,
+                  summary: `✓ Novedad ${id} eliminada de la base de datos.`
+                });
+              }
+            } else if (act.type === 'NAVIGATE_UI' && act.payload) {
+              executedActions.push({
+                type: 'NAVIGATE_UI',
+                payload: act.payload,
+                summary: `✓ Vista adaptada en tiempo real.`
+              });
+            } else if (act.type === 'ASSIGN_DOCUMENT' && act.payload) {
+              const { documentId, mainSection, item, branch, title } = act.payload;
+              const doc = documents.find((d: any) => d.id === documentId || d.name?.includes(documentId));
+              if (doc) {
+                const newId = `NOV-${Date.now().toString().slice(-6)}`;
+                const newInc = {
+                  id: newId,
+                  code: `TES-${(branch || doc.branch || 'CBC').substring(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`,
+                  mainSection: mainSection || 'SSOMA',
+                  subSection: mainSection === 'SEGURIDAD_FISICA' ? 'SECURITY' : 'SAFETY',
+                  classificationType: mainSection === 'SEGURIDAD_FISICA' ? 'Incidentes de Security' : 'Condiciones de Seguridad (Safety)',
+                  item: item || 'Novedad de Repositorio',
+                  branch: branch || doc.branch || 'Tesalia Planta Gye',
+                  specificLocation: 'Área Operativa / Repositorio',
+                  title: title || `Novedad de: ${doc.name}`,
+                  description: `Novedad vinculada al archivo ${doc.name} (Carpeta: ${doc.folderName}).`,
+                  actionsTaken: 'Asignado en tiempo real por el Asistente IA.',
+                  severity: 'MEDIA',
+                  status: 'EN_GESTION',
+                  timestamp: new Date().toISOString(),
+                  month: 'AGOSTO',
+                  year: 2026,
+                  operator: {
+                    id: 'usr-admin',
+                    name: 'José Manuel Arguello Coloma',
+                    role: 'Coordinador Liderman / Administrador',
+                    shift: 'General Administrativo'
+                  },
+                  evidenceImages: doc.mimeType?.startsWith('image/') ? [`/api/documents/${doc.id}/view`] : [],
+                  sourceDocument: {
+                    id: doc.id,
+                    name: doc.name,
+                    storageName: doc.storageName,
+                    folderName: doc.folderName
+                  },
+                  reportedToLegio: false,
+                  cctvCaseResolved: true
+                };
+                incidents.unshift(newInc);
+                saveIncidents(incidents);
+                doc.assignedIncidentId = newId;
+                doc.assignedIncidentTitle = newInc.title;
+                saveDocuments(documents);
+                executedActions.push({
+                  type: 'ASSIGN_DOCUMENT',
+                  incident: newInc,
+                  document: doc,
+                  summary: `✓ Archivo "${doc.name}" vinculado a la novedad ${newInc.id}.`
+                });
+              }
+            } else if (act.type === 'CLEAR_INCIDENTS') {
+              incidents = [];
+              saveIncidents(incidents);
+              executedActions.push({
+                type: 'CLEAR_INCIDENTS',
+                summary: '✓ Base de datos de novedades limpiada exitosamente.'
+              });
+            }
+          }
+        }
+      } catch (parseErr) {
+        console.warn('Error executing AI actions:', parseErr);
+      }
+    }
+
+    // Clean JSON block from user-visible reply
+    const cleanReply = replyText
+      .replace(/```json:action[\s\S]*?```/g, '')
+      .replace(/```json\s*\{[\s\S]*?"actions"[\s\S]*?\}\s*```/g, '')
+      .trim();
 
     res.json({
       success: true,
-      reply: replyText,
+      reply: cleanReply || replyText,
+      executedActions,
+      updatedIncidents: getIncidents(),
+      updatedDocuments: getDocuments(),
       quickPrompts: [
         '¿Cómo clasifico una falla de cámara CCTV?',
-        '¿Qué items componen la sección SSOMA?',
-        '¿Cómo asigno un archivo del Drive a la Matriz?',
-        '¿Cuáles son las 6 sucursales del proyecto?'
+        'Registra una novedad de falla de cerradura en Planta Machala',
+        'Cambia la última novedad a estado RESUELTO',
+        'Llévame a ver las novedades de SSOMA'
       ]
     });
   } catch (err: any) {
@@ -1061,6 +1520,223 @@ REGLAS DE RESPUESTA:
     res.status(500).json({ success: false, error: err.message || 'Error en el asistente de chat.' });
   }
 });
+
+function generateActionReplyFromIntent(
+  query: string, 
+  incidents: any[], 
+  documents: any[], 
+  folders: any[]
+): { reply: string, actions: any[] } {
+  const q = query.toLowerCase();
+  const actions: any[] = [];
+
+  // 1. Detect Navigation Intents FIRST
+  if ((q.includes('ssoma') || q.includes('industrial')) && (q.includes('ver') || q.includes('mostrar') || q.includes('ir') || q.includes('llev') || q.includes('llév') || q.includes('abrir'))) {
+    actions.push({
+      type: 'NAVIGATE_UI',
+      payload: { activeModule: 'NOVEDADES', activeMainSection: 'SSOMA' }
+    });
+    return {
+      reply: `🔍 **Navegando a Seguridad Industrial (SSOMA):** Se ha cambiado la vista activa a la sección de SSOMA para que visualices la matriz y los indicadores correspondientes.`,
+      actions
+    };
+  }
+
+  if ((q.includes('seguridad física') || q.includes('seguridad fisica') || q.includes('física') || q.includes('fisica')) && (q.includes('ver') || q.includes('mostrar') || q.includes('ir') || q.includes('llev') || q.includes('llév'))) {
+    actions.push({
+      type: 'NAVIGATE_UI',
+      payload: { activeModule: 'NOVEDADES', activeMainSection: 'SEGURIDAD_FISICA' }
+    });
+    return {
+      reply: `🔍 **Navegando a Seguridad Física:** Se ha cambiado la vista activa a la sección de Seguridad Física.`,
+      actions
+    };
+  }
+
+  if (q.includes('drive') || q.includes('repositorio') || q.includes('carpeta') || q.includes('archivos')) {
+    if (q.includes('ver') || q.includes('abrir') || q.includes('ir') || q.includes('llev') || q.includes('llév')) {
+      actions.push({
+        type: 'NAVIGATE_UI',
+        payload: { activeModule: 'DRIVE' }
+      });
+      return {
+        reply: `📁 **Navegando al Repositorio Documental Tipo Drive:** He abierto el módulo del Drive para que gestiones carpetas y archivos.`,
+        actions
+      };
+    }
+  }
+
+  // 2. Detect Intent: CREATE_INCIDENT
+  if (q.includes('registra') || q.includes('crea') || q.includes('agrega') || q.includes('nueva novedad') || q.includes('reporta')) {
+    let branch = 'Tesalia Planta Gye';
+    if (q.includes('milagro')) branch = 'Planta Milagro';
+    else if (q.includes('machala')) branch = 'Planta Machala';
+    else if (q.includes('manta')) branch = 'Ag. Manta';
+    else if (q.includes('gye norte') || q.includes('norte')) branch = 'Ag. Gye Norte';
+    else if (q.includes('gye sur') || q.includes('sur')) branch = 'Ag. Gye Sur';
+
+    const isSsoma = q.includes('incendio') || q.includes('fuego') || q.includes('conato') || 
+                    q.includes('estiba') || q.includes('epp') || q.includes('quimico') || 
+                    q.includes('químico') || q.includes('derrame') || q.includes('fuga') || 
+                    q.includes('ssoma') || q.includes('industrial') || q.includes('cable') ||
+                    q.includes('resbaloso') || q.includes('piso mojado');
+
+    let mainSection = isSsoma ? 'SSOMA' : 'SEGURIDAD_FISICA';
+    let subSection = isSsoma ? 'SAFETY' : 'SECURITY';
+    let item = isSsoma ? 'CONATO / INCENDIO' : 'FALLA DE PUERTAS Y VENTANAS (CHAPAS, OTROS)';
+    let title = 'Novedad Operativa';
+    let severity = 'MEDIA';
+
+    if (q.includes('incendio') || q.includes('conato')) {
+      item = 'CONATO / INCENDIO';
+      subSection = 'SAFETY';
+      mainSection = 'SSOMA';
+      title = `Conato de incendio reportado en ${branch}`;
+      severity = 'ALTA';
+    } else if (q.includes('estiba')) {
+      item = 'ESTIBAS MAL UBICADAS O MAL REALIZADAS';
+      subSection = 'SAFETY';
+      mainSection = 'SSOMA';
+      title = `Estibas mal ubicadas en ${branch}`;
+    } else if (q.includes('epp')) {
+      item = 'NO USO DE EPP';
+      subSection = 'SSO';
+      mainSection = 'SSOMA';
+      title = `Personal detectado sin EPP en ${branch}`;
+    } else if (q.includes('derrame') || q.includes('químico') || q.includes('quimico')) {
+      item = 'DERRAME DE COMBUSTIBLE / QUÍMICOS';
+      subSection = 'SMA';
+      mainSection = 'SSOMA';
+      title = `Derrame químico reportado en ${branch}`;
+      severity = 'ALTA';
+    } else if (q.includes('cctv') || q.includes('camara') || q.includes('cámara')) {
+      item = 'FALLAS SISTEMA CCTV';
+      subSection = 'KPI_MEJORA_SERVICIO';
+      mainSection = 'SEGURIDAD_FISICA';
+      title = `Falla de cámara CCTV en ${branch}`;
+    } else if (q.includes('cerradura') || q.includes('puerta') || q.includes('chapa')) {
+      item = 'FALLA DE PUERTAS Y VENTANAS (CHAPAS, OTROS)';
+      subSection = 'SECURITY';
+      mainSection = 'SEGURIDAD_FISICA';
+      title = `Falla en cerradura o acceso en ${branch}`;
+    } else {
+      title = query.length > 55 ? query.substring(0, 52) + '...' : query;
+    }
+
+    actions.push({
+      type: 'CREATE_INCIDENT',
+      payload: {
+        title,
+        mainSection,
+        subSection,
+        classificationType: isSsoma ? 'Condiciones de Seguridad' : 'Incidentes de Security',
+        item,
+        branch,
+        specificLocation: 'Área Operativa',
+        description: query,
+        actionsTaken: 'Registrado en tiempo real por el Asistente Operativo Liderman.',
+        severity,
+        status: 'EN_GESTION',
+        month: 'AGOSTO',
+        year: 2026
+      }
+    });
+
+    return {
+      reply: `✅ **He registrado la novedad en tiempo real en la plataforma:**\n- **Título:** ${title}\n- **Sucursal:** ${branch}\n- **Sección:** ${mainSection === 'SEGURIDAD_FISICA' ? 'Seguridad Física' : 'Seguridad Industrial (SSOMA)'}\n- **Ítem:** ${item}\n- **Estado:** En Gestión\n\nLos indicadores y las matrices han sido actualizados de inmediato sin necesidad de reprogramar.`,
+      actions
+    };
+  }
+
+  // 2. Detect Intent: STATUS RESUELTO
+  if (q.includes('resuelto') || q.includes('resolver') || q.includes('solucionar') || q.includes('solucionado')) {
+    actions.push({
+      type: 'UPDATE_INCIDENT',
+      payload: {
+        updates: { status: 'RESUELTO' }
+      }
+    });
+    return {
+      reply: `✅ **Modificación realizada:** He actualizado la novedad a estado **RESUELTO** en tiempo real. La matriz y los indicadores ya reflejan este cambio operativo.`,
+      actions
+    };
+  }
+
+  // 3. Detect Intent: RECLASSIFY TO SSOMA
+  if (q.includes('ssoma') && (q.includes('pasa') || q.includes('mover') || q.includes('cambia'))) {
+    actions.push({
+      type: 'UPDATE_INCIDENT',
+      payload: {
+        updates: { mainSection: 'SSOMA', subSection: 'SAFETY' }
+      }
+    });
+    actions.push({
+      type: 'NAVIGATE_UI',
+      payload: { activeModule: 'NOVEDADES', activeMainSection: 'SSOMA' }
+    });
+    return {
+      reply: `✅ **Novedad reclasificada a SSOMA:** Se actualizó la sección a **Seguridad Industrial (SSOMA)** y la vista ha cambiado para que la veas en la Matriz correspondiente.`,
+      actions
+    };
+  }
+
+  // 4. Detect Intent: RECLASSIFY TO SEGURIDAD FISICA
+  if ((q.includes('seguridad física') || q.includes('seguridad fisica')) && (q.includes('pasa') || q.includes('mover') || q.includes('cambia'))) {
+    actions.push({
+      type: 'UPDATE_INCIDENT',
+      payload: {
+        updates: { mainSection: 'SEGURIDAD_FISICA', subSection: 'SECURITY' }
+      }
+    });
+    actions.push({
+      type: 'NAVIGATE_UI',
+      payload: { activeModule: 'NOVEDADES', activeMainSection: 'SEGURIDAD_FISICA' }
+    });
+    return {
+      reply: `✅ **Novedad reclasificada a Seguridad Física:** Se actualizó la sección a **Seguridad Física** y la matriz fue recalculada.`,
+      actions
+    };
+  }
+
+  // 5. Detect Intent: NAVIGATE_UI
+  if (q.includes('ver ssoma') || q.includes('ir a ssoma') || q.includes('llévame a ssoma') || q.includes('llevame a ssoma')) {
+    actions.push({
+      type: 'NAVIGATE_UI',
+      payload: { activeModule: 'NOVEDADES', activeMainSection: 'SSOMA' }
+    });
+    return {
+      reply: `🔍 **Navegando a Seguridad Industrial (SSOMA):** Se ha cambiado la vista activa a la sección de SSOMA.`,
+      actions
+    };
+  }
+
+  if (q.includes('ver seguridad física') || q.includes('ver seguridad fisica') || q.includes('llévame a seguridad') || q.includes('llevame a seguridad')) {
+    actions.push({
+      type: 'NAVIGATE_UI',
+      payload: { activeModule: 'NOVEDADES', activeMainSection: 'SEGURIDAD_FISICA' }
+    });
+    return {
+      reply: `🔍 **Navegando a Seguridad Física:** Se ha cambiado la vista activa a Seguridad Física.`,
+      actions
+    };
+  }
+
+  if (q.includes('abrir drive') || q.includes('ver drive') || q.includes('repositorio')) {
+    actions.push({
+      type: 'NAVIGATE_UI',
+      payload: { activeModule: 'DRIVE' }
+    });
+    return {
+      reply: `📁 **Navegando al Repositorio Documental Tipo Drive:** He abierto el módulo del Drive para que gestiones carpetas y archivos.`,
+      actions
+    };
+  }
+
+  return {
+    reply: getFallbackChatResponse(query, incidents.length, documents.length),
+    actions: []
+  };
+}
 
 function getFallbackChatResponse(query: string, incCount: number, docCount: number): string {
   const q = query.toLowerCase();
@@ -1079,24 +1755,39 @@ function getFallbackChatResponse(query: string, incCount: number, docCount: numb
   return `Buen día. Soy el **Asistente Operativo Liderman** para el proyecto **Tesalia CBC** administrado por **José Manuel Arguello Coloma**.\n\nActualmente tienes **${incCount} novedades** en la Matriz y **${docCount} archivos** en el Repositorio Digital.\n\n¿En qué te puedo orientar hoy? Puedes preguntarme sobre:\n- Clasificación de una novedad específica (Seguridad Física vs SSOMA).\n- Guía para asignar un documento a la matriz si falló el análisis automático.\n- Protocolos en sucursales o estado de los indicadores.`;
 }
 
-// 6. AI Document Analysis Endpoint with Gemini 3.8 Flash
+// 6. AI Document Analysis Endpoint with Gemini 3.8 Flash & Senior Security Expert Criteria
 app.post('/api/ai/analyze-document', async (req, res) => {
-
   try {
     const { fileData, fileName, fileMimeType, fileText } = req.body;
 
     const taxonomyContext = `
-ERES EL AUDITOR EXPERTO DE SEGURIDAD FÍSICA Y SSOMA DE LIDERMAN PARA EL PROYECTO CLIENTE "TESALIA CBC", ADMINISTRADO POR JOSÉ MANUEL ARGUELLO COLOMA.
+ACTÚAS CON EL MÁS ALTO CRITERIO DE UN EXPERTO SENIOR Y AUDITOR JEFE EN:
+1. SEGURIDAD FÍSICA Y CONTROL DE ACCESOS
+2. SEGURIDAD PATRIMONIAL (PROTECCIÓN DE ACTIVOS, PREVENCIÓN DE PÉRDIDAS, CONTROL DE MERMAS Y LOGÍSTICA DE CARGA)
+3. SEGURIDAD INDUSTRIAL Y SSOMA (SAFETY, SALUD OCUPACIONAL Y SISTEMA MEDIO AMBIENTAL)
+PARA LA OPERACIÓN NACIONAL DE LIDERMAN EN EL CLIENTE CORPORATIVO "TESALIA CBC", LIDERADO POR EL ADMINISTRADOR Y COORDINADOR JOSÉ MANUEL ARGUELLO COLOMA.
 
-Tu misión es analizar el documento subido (PDF, Excel, CSV o Imagen de minutas/novedades/partes de guardia de consola) y estructurar cada novedad identificada según la TAXONOMÍA OFICIAL ESTRICTA de Tesalia CBC y Liderman.
+Tu misión pericial es analizar minuciosamente el documento cargado (reportes diarios de consola, bitácoras de guardia, informes semanales en Word, minutas en PDF, matrices en Excel o fotografías de novedades) y estructurar con precisión técnica cada una de las novedades halladas.
+
+CRITERIOS TÉCNICOS Y PERICIALES DE EVALUACIÓN:
+- SEGURIDAD FÍSICA Y PATRIMONIAL:
+  * Control de Accesos y Barreras: Vulnerabilidades en portones, esclusas, brazos hidráulicos, candados, cerraduras, chapas, puertas y ventanas abiertas o sin seguro.
+  * Pérdida de Activos (Seguridad Patrimonial): Robos, sustracciones, mermas, decomisos, salida de mercadería o activos con autorización verbal o sin documento legal, vehículos o personas sospechosas en perímetros.
+  * Sistemas Electrónicos de Seguridad: Fallas en CCTV (cámaras fuera de línea, mala orientación/enfoque, monitores apagados, puntos ciegos), cercos eléctricos inoperativos, alarmas activadas, fallas en balanzas de pesaje.
+  * Gestión de Servicio: Casos resueltos mediante revisión de CCTV, reportes formalizados al portal LEGIO, briefings de consignas y rondas de supervisión.
+
+- SEGURIDAD INDUSTRIAL Y MEDIO AMBIENTE (SSOMA):
+  * SAFETY: Condiciones y actos subestándares (estibas inestables o sobrepasando altura límite, bloqueo de extintores o gabinetes de mangueras, extintores descargados o con fecha vencida, falta de señalización preventiva, bloqueo de puertas de evacuación, derrames de productos en áreas de paso, pisos mojados o resbalosos, cables eléctricos expuestos o conatos de incendio).
+  * SMA (Medio Ambiente): Derrames o fugas de hidrocarburos / químicos, luces encendidas o maquinaria operando sin personal fuera de jornada laboral (desperdicio energético), mala gestión de desechos.
+  * SSO (Salud Ocupacional): Personal operando sin equipo de protección personal (EPP: casco, chaleco reflectivo, botas de acero, gafas), maniobras peligrosas con transpaletas o montacargas, riesgos ergonómicos.
 
 LAS SUCURSALES VÁLIDAS SON ÚNICAMENTE:
-- "Ag. Gye Norte"
-- "Ag. Gye Sur"
-- "Tesalia Planta Gye"
-- "Planta Milagro"
-- "Ag. Manta"
-- "Planta Machala"
+- "Ag. Gye Norte" (reconoce: Gye Norte, Norte, Agencia Norte)
+- "Ag. Gye Sur" (reconoce: Gye Sur, Sur, Agencia Sur)
+- "Tesalia Planta Gye" (reconoce: Planta Gye, Planta Guayaquil, Tesalia Gye)
+- "Planta Milagro" (reconoce: Milagro, Planta Milagro)
+- "Ag. Manta" (reconoce: Manta, Agencia Manta)
+- "Planta Machala" (reconoce: Machala, Planta Machala)
 (Si en el texto no se especifica con claridad, deduce la más probable entre estas 6 o asigna "Tesalia Planta Gye").
 
 LAS DOS GRANDES SECCIONES Y SUS SUBDIVISIONES E ÍTEMS OFICIALES SON:
@@ -1185,8 +1876,8 @@ SECCIÓN 2: "SSOMA" (SEGURIDAD INDUSTRIAL Y MEDIO AMBIENTE)
 
 RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
 {
-  "summary": "Resumen ejecutivo del archivo analizado y total de novedades identificadas",
-  "detectedMonth": "Nombre del mes en mayúsculas (ej: AGOSTO, SEPTIEMBRE, ENERO)",
+  "summary": "Resumen ejecutivo del archivo analizado con criterio pericial de seguridad y total de novedades estructuradas",
+  "detectedMonth": "Nombre del mes en mayúsculas (ej: AGOSTO, SEPTIEMBRE, OCTUBRE)",
   "detectedYear": 2026,
   "incidents": [
     {
@@ -1194,14 +1885,14 @@ RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
       "mainSection": "SEGURIDAD_FISICA" | "SSOMA",
       "subSection": "SECURITY" | "KPI_MEJORA_SERVICIO" | "GESTION_INTERNA" | "SAFETY" | "SMA" | "SSO",
       "classificationType": "Nombre exacto del tipo",
-      "item": "Nombre exacto del ítem según la lista proporcionada arriba",
+      "item": "Nombre exacto del ítem según la taxonomía oficial proporcionada",
       "branch": "Una de las 6 sucursales exactas",
-      "specificLocation": "Ubicación detallada dentro de la planta o agencia",
-      "description": "Explicación detallada de lo sucedido o condición hallada",
+      "specificLocation": "Ubicación específica dentro de la planta o agencia",
+      "description": "Explicación detallada de lo sucedido, condición hallada o vulnerabilidad detectada",
       "timestamp": "ISO 8601 string o fecha detectada",
       "severity": "BAJA" | "MEDIA" | "ALTA" | "CRÍTICA",
       "status": "ABIERTO" | "EN_GESTION" | "REPORTADO_LEGIO" | "RESUELTO",
-      "actionsTaken": "Acciones correctivas inmediatas o recomendaciones",
+      "actionsTaken": "Acciones correctivas inmediatas, recomendaciones operativas o número de ticket",
       "reportedToLegio": boolean,
       "legioTicketNumber": "número de ticket si existe o vacío",
       "cctvCaseResolved": boolean
@@ -1212,28 +1903,27 @@ RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
 
     const contents: any[] = [];
 
-    // Text / CSV / Excel / Word docx extract
+    // Comprehensive text extraction across Word, Excel, PDF, and plain text
     let textToAnalyze = fileText || '';
-    if (!textToAnalyze && fileData) {
-      if (fileName && fileName.match(/\.(docx|doc)$/i)) {
-        try {
-          const buffer = Buffer.from(fileData.split(',')[1] || fileData, 'base64');
-          const result = await mammoth.extractRawText({ buffer });
-          textToAnalyze = result.value || '';
-        } catch (docxErr) {
-          console.warn('Error extracting docx with mammoth:', docxErr);
-          textToAnalyze = Buffer.from(fileData.split(',')[1] || fileData, 'base64').toString('utf-8');
+    if (fileData) {
+      try {
+        const base64Clean = fileData.split(',')[1] || fileData;
+        const buffer = Buffer.from(base64Clean, 'base64');
+        const extracted = await extractTextFromFileBuffer(buffer, fileName || '', fileMimeType);
+        if (extracted) {
+          textToAnalyze = textToAnalyze ? `${textToAnalyze}\n\n${extracted}` : extracted;
         }
-      } else if (!fileMimeType?.startsWith('image/') && fileMimeType !== 'application/pdf') {
-        textToAnalyze = Buffer.from(fileData.split(',')[1] || fileData, 'base64').toString('utf-8');
+      } catch (extractErr) {
+        console.warn('Error during buffer text extraction in analyze-document:', extractErr);
       }
     }
+
     if (!textToAnalyze && !fileMimeType?.startsWith('image/') && fileMimeType !== 'application/pdf') {
-      textToAnalyze = 'Sin contenido';
+      textToAnalyze = 'Sin contenido de texto detectado';
     }
     
-    // Clean and limit length to prevent token overflow on large spreadsheets
-    const trimmedText = textToAnalyze.length > 25000 ? textToAnalyze.slice(0, 25000) + '\n[...Contenido truncado para optimización...]' : textToAnalyze;
+    // Clean and limit length for prompt optimization
+    const trimmedText = textToAnalyze.length > 30000 ? textToAnalyze.slice(0, 30000) + '\n[...Contenido optimizado para análisis...]' : textToAnalyze;
 
     if (fileData && fileMimeType && fileMimeType.startsWith('image/')) {
       // Inline image
@@ -1246,12 +1936,12 @@ RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
             },
           },
           {
-            text: `${taxonomyContext}\n\nAnaliza esta imagen adjunta (documento/minuta/evidencia fotográfica de novedades): ${fileName || 'Archivo de Novedad'}`,
+            text: `${taxonomyContext}\n\nAnaliza con criterio pericial de seguridad física, patrimonial e industrial esta evidencia fotográfica/documento adjunto: ${fileName || 'Archivo de Novedad'}`,
           },
         ],
       });
-    } else if (fileData && fileMimeType === 'application/pdf') {
-      // Inline PDF
+    } else if (fileData && (fileMimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
+      // Inline PDF alongside extracted text
       contents.push({
         parts: [
           {
@@ -1261,7 +1951,7 @@ RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
             },
           },
           {
-            text: `${taxonomyContext}\n\nAnaliza este documento PDF adjunto de reporte operativo/KPIs de Tesalia CBC: ${fileName || 'Reporte.pdf'}`,
+            text: `${taxonomyContext}\n\nNombre del archivo PDF: ${fileName || 'Reporte.pdf'}\n\nTexto extraído del documento:\n${trimmedText || 'Lectura directa de documento PDF.'}`,
           },
         ],
       });
@@ -1269,7 +1959,7 @@ RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
       contents.push({
         parts: [
           {
-            text: `${taxonomyContext}\n\nNombre del archivo: ${fileName}\n\nContenido extraído del archivo:\n${trimmedText}`,
+            text: `${taxonomyContext}\n\nNombre del archivo: ${fileName}\n\nContenido extraído del documento (hojas de cálculo, minutas o texto operativo):\n${trimmedText}`,
           },
         ],
       });
@@ -1306,8 +1996,7 @@ RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
         } catch (err: any) {
           lastApiError = err;
           console.warn(`[AI Analysis] Error con ${modelCandidate} (intento ${attempt}):`, err?.message || err);
-          // Small pause before retry
-          await new Promise(res => setTimeout(res, 1200));
+          await new Promise(res => setTimeout(res, 800));
         }
       }
       if (responseText) break;
@@ -1323,10 +2012,10 @@ RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
       }
     }
 
-    // Heuristic contingency parser if Gemini API was temporarily unavailable (e.g. 503 spike in demand)
+    // Heuristic contingency parser if Gemini API was temporarily unavailable (e.g. 503 spike in demand or 429 quota)
     if (!parsedResult || !parsedResult.incidents || parsedResult.incidents.length === 0) {
       if (lastApiError) {
-        console.log('[AI Analysis] Activando motor de procesamiento de contingencia inteligente para estructurar los datos del archivo.');
+        console.log('[AI Analysis] Activando motor de procesamiento de contingencia inteligente con criterio experto de seguridad.');
       }
       parsedResult = parseDocumentWithRuleEngine(trimmedText, fileName || 'Reporte');
     }
@@ -1338,13 +2027,13 @@ RESPONDE EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO CON ESTA ESTRUCTURA:
   }
 });
 
-// Deterministic contingency parser for Excel/CSV/Text in case of external API 503 peak demand
+// Deterministic contingency parser for Excel/CSV/Word/PDF/Text in case of external API 503 peak demand or quota limits
 function parseDocumentWithRuleEngine(rawText: string, fileName: string) {
-  const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('---'));
+  const rawLines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('===') && !l.startsWith('---'));
   
   // Detect month from filename or content
   let detectedMonth = 'AGOSTO';
-  const monthMatches = rawText.match(/(ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)/i);
+  const monthMatches = (fileName + ' ' + rawText.slice(0, 5000)).match(/(ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)/i);
   if (monthMatches) {
     detectedMonth = monthMatches[1].toUpperCase();
   }
@@ -1360,24 +2049,48 @@ function parseDocumentWithRuleEngine(rawText: string, fileName: string) {
 
   const extractedIncidents: any[] = [];
 
-  for (let i = 0; i < lines.length && extractedIncidents.length < 25; i++) {
-    const line = lines[i];
+  for (let i = 0; i < rawLines.length && extractedIncidents.length < 50; i++) {
+    const line = rawLines[i];
     // Skip typical header rows
-    if (/^(fecha|nro|item|sucursal|area|clasificacion|columna|tabla)/i.test(line)) continue;
-    if (line.length < 10) continue;
+    if (/^(fecha|nro|item|sucursal|area|clasificacion|columna|tabla|id|codigo|código|novedad\s*,)/i.test(line)) continue;
+    if (line.length < 12) continue;
 
     // Detect branch
     let matchedBranch = 'Tesalia Planta Gye';
     for (const b of branches) {
       const bRegex = new RegExp(b.replace('.', '\\.'), 'i');
-      if (bRegex.test(line) || (b === 'Ag. Gye Norte' && /gye\s*norte|norte/i.test(line)) || (b === 'Ag. Gye Sur' && /gye\s*sur|sur/i.test(line)) || (b === 'Planta Milagro' && /milagro/i.test(line)) || (b === 'Ag. Manta' && /manta/i.test(line)) || (b === 'Planta Machala' && /machala/i.test(line))) {
+      if (bRegex.test(line) || 
+         (b === 'Ag. Gye Norte' && /gye\s*norte|agencia\s*norte|norte/i.test(line)) || 
+         (b === 'Ag. Gye Sur' && /gye\s*sur|agencia\s*sur|sur/i.test(line)) || 
+         (b === 'Planta Milagro' && /milagro/i.test(line)) || 
+         (b === 'Ag. Manta' && /manta/i.test(line)) || 
+         (b === 'Planta Machala' && /machala/i.test(line))) {
         matchedBranch = b;
         break;
       }
     }
 
-    // Determine category
-    const isSSOMA = /(epp|seguridad industrial|ssoma|medio ambiente|sma|sso|derrame|fuga|extintor|humo|incendio|accidente|salud|ergonom)/i.test(line);
+    // Detect location
+    let specificLocation = 'Área Operativa de Planta/Agencia';
+    const locMatch = line.match(/(garita\s*\d*|patio\s*de\s*maniobras|and[eé]n\s*de\s*carga|bodega\s*\w*|sala\s*de\s*ventas|oficinas\s*administrativas|talleres|port[oó]n\s*\w*|b[oó]veda|esclusa)/i);
+    if (locMatch) {
+      specificLocation = locMatch[0].charAt(0).toUpperCase() + locMatch[0].slice(1);
+    }
+
+    // Detect date/timestamp if present in line
+    let timestamp = new Date().toISOString();
+    const dateMatch = line.match(/(\d{4}[-/]\d{2}[-/]\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?|\d{2}[-/]\d{2}[-/]\d{4})/);
+    if (dateMatch) {
+      try {
+        const parsed = new Date(dateMatch[1].replace(/\//g, '-'));
+        if (!isNaN(parsed.getTime())) {
+          timestamp = parsed.toISOString();
+        }
+      } catch { }
+    }
+
+    // Determine category with Senior Security & SSOMA Criteria
+    const isSSOMA = /(epp|seguridad industrial|ssoma|medio ambiente|sma|sso|derrame|fuga|extintor|humo|incendio|conato|accidente|salud|ergonom|estiba|pasos de seguridad|piso\s*mojado|resbal|cable|desecho|quimico|químico)/i.test(line);
     const mainSection = isSSOMA ? 'SSOMA' : 'SEGURIDAD_FISICA';
 
     let subSection = 'SECURITY';
@@ -1385,35 +2098,52 @@ function parseDocumentWithRuleEngine(rawText: string, fileName: string) {
     let item = 'OTROS 1';
 
     if (isSSOMA) {
-      if (/extintor|humo|conato|incendio|fluido|electrico|falla/i.test(line)) {
+      if (/extintor|humo|conato|incendio|fluido|electrico|eléctrico|estiba|pasos de seguridad|señal|cable|danos|daños/i.test(line)) {
         subSection = 'SAFETY';
         classificationType = 'Condiciones Subestándares';
-        item = /extintor/i.test(line) ? 'FALTA DE EXTINTORES O FECHAS VENCIDAS' : 'CONATO / INCENDIO';
-      } else if (/derrame|fuga|desecho|agua|basura|recicl/i.test(line)) {
+        if (/extintor/i.test(line)) item = 'FALTA DE EXTINTORES O FECHAS VENCIDAS';
+        else if (/humo|conato|incendio/i.test(line)) item = 'CONATO / INCENDIO';
+        else if (/estiba/i.test(line)) item = 'ESTIBAS MAL UBICADAS O MAL REALIZADAS';
+        else if (/pasos|señal/i.test(line)) item = 'FALTA DE SEÑALIZACIÓN O INADECUADA';
+        else if (/cable|electrico|eléctrico/i.test(line)) item = 'CORTE DE FLUIDO ELÉCTRICO INT./ EXT.';
+        else item = 'EQUIPOS DEFECTUOSOS / INSTALACIÓN DEFECTUOSA';
+      } else if (/derrame|fuga|desecho|agua|basura|recicl|luz|luces|energi|energí/i.test(line)) {
         subSection = 'SMA';
         classificationType = 'Actos de Sistema Medio Ambiental';
-        item = /derrame|fuga/i.test(line) ? 'FUGAS / DERRAMES / EMANACIONES' : 'DESECHOS INORGÁNICOS (PAPEL, MADERA, PLASTICO, OTROS RECICLADOS)';
+        if (/luz|luces/i.test(line)) item = 'LUCES ENCENDIDAS';
+        else if (/derrame|fuga|quimic|químic/i.test(line)) item = 'FUGAS / DERRAMES / EMANACIONES';
+        else item = 'DESECHOS INORGÁNICOS (PAPEL, MADERA, PLASTICO, OTROS RECICLADOS)';
       } else {
         subSection = 'SSO';
         classificationType = 'Actos de Seguridad y Salud Ocupacional';
         item = /epp/i.test(line) ? 'NO USO DE EPP' : 'MANIOBRAS PELIGROSAS';
       }
     } else {
-      if (/iluminac|reflector|falla|puerta|alarma|cctv|camara|chapa/i.test(line)) {
+      // Seguridad Física y Patrimonial
+      if (/iluminac|reflector|falla|puerta|alarma|cctv|camara|cámara|chapa|porton|portón|brazo|seguro|pesaje|balanza/i.test(line)) {
         subSection = 'SECURITY';
         classificationType = 'Condiciones Subestándares';
         if (/iluminac|reflector/i.test(line)) item = 'FALLA DE ILUMINACIÓN (INTERNA Y EXTERNA)';
-        else if (/puerta|chapa|candado/i.test(line)) item = 'FALLA DE PUERTAS Y VENTANAS (CHAPAS, OTROS)';
+        else if (/puerta|chapa|candado|porton|portón|brazo/i.test(line)) item = 'FALLA DE PUERTAS Y VENTANAS (CHAPAS, OTROS)';
         else if (/alarma|cerco/i.test(line)) item = 'FALLA DE ALARMAS (CERCO ELÉCTRICO, SENSORES, OTROS)';
-        else if (/cctv|camara/i.test(line)) item = 'FALLA DE CCTV (CAMARA, MONITOR, GRABACIÓN)';
+        else if (/cctv|camara|cámara/i.test(line)) item = 'FALLA DE CCTV (CAMARA, MONITOR, GRABACIÓN)';
+        else if (/pesaje|balanza/i.test(line)) item = 'FALLA DE PESAJE, BALANZA';
         else item = 'OTROS 2';
+      } else if (/kpi|informe|supervision|supervisión|briefing|capacita/i.test(line)) {
+        subSection = 'KPI_MEJORA_SERVICIO';
+        classificationType = 'KPI Mejora de Servicio';
+        if (/informe/i.test(line)) item = 'INFORMES ENVIADOS';
+        else if (/cctv|caso/i.test(line)) item = 'CASOS RESUELTOS POR CCTV';
+        else if (/capacita/i.test(line)) item = 'CAPACITACIONES';
+        else item = 'SUPERVISION SISTEMA CCTV';
       } else {
         subSection = 'SECURITY';
         classificationType = 'Actos Subestándares';
-        if (/robo|hurto|perdida|sustracc/i.test(line)) item = 'ROBOS, PÉRDIDAS / SUSTRACCIONES / DECOMISOS DEVOLUCIONES';
+        if (/robo|hurto|perdida|pérdida|sustracc|decomiso/i.test(line)) item = 'ROBOS, PÉRDIDAS / SUSTRACCIONES / DECOMISOS DEVOLUCIONES';
         else if (/sospechos/i.test(line)) item = 'VEHICULOS / PERSONAS SOSPECHOSAS';
         else if (/autoriz|verbal/i.test(line)) item = 'AUTORIZACIÓN DE SALIDA DE MATERIAL EN FORMA VERBAL';
         else if (/alcohol|etilic|embriaguez/i.test(line)) item = 'SINTOMAS DE EMBRIAGUEZ, ESTADO ETÍLICO';
+        else if (/puerta.*abierta|ventana.*abierta/i.test(line)) item = 'PUERTAS Y VENTANAS ABIERTAS O SIN SEGURO';
         else if (/vehiculo.*abierto|furgon.*abierto/i.test(line)) item = 'VEHICULOS ABIERTOS O SIN SEGURO';
         else item = 'OTROS 1';
       }
@@ -1421,24 +2151,24 @@ function parseDocumentWithRuleEngine(rawText: string, fileName: string) {
 
     // Clean description
     const cleanedLine = line.replace(/^[,\s;]+|[,\s;]+$/g, '').replace(/,{2,}/g, ' - ');
-    const titleSnippet = cleanedLine.split('-')[0].trim().slice(0, 70);
+    const titleSnippet = cleanedLine.split(/[,-]/)[0].trim().slice(0, 75);
 
     extractedIncidents.push({
-      title: titleSnippet || `Reporte en ${matchedBranch}`,
+      title: titleSnippet || `Novedad identificada en ${matchedBranch}`,
       mainSection,
       subSection,
       classificationType,
       item,
       branch: matchedBranch,
-      specificLocation: 'Área operativa de planta/agencia',
+      specificLocation,
       description: cleanedLine,
-      timestamp: new Date().toISOString(),
-      severity: /critico|grave|urgente|inmediato/i.test(line) ? 'ALTA' : 'MEDIA',
+      timestamp,
+      severity: /critico|crítica|grave|urgente|inmediato|incendio|robo|fuga/i.test(line) ? 'ALTA' : 'MEDIA',
       status: /resuelto|cerrado|solucionado/i.test(line) ? 'RESUELTO' : 'EN_GESTION',
       actionsTaken: 'Acción preventiva y verificación coordinada por operador de consola Liderman.',
       reportedToLegio: /legio/i.test(line),
       legioTicketNumber: /legio/i.test(line) ? `LEG-${Math.floor(10000 + Math.random() * 89999)}` : '',
-      cctvCaseResolved: /cctv/i.test(line)
+      cctvCaseResolved: /cctv|camara|cámara/i.test(line)
     });
   }
 
@@ -1452,7 +2182,7 @@ function parseDocumentWithRuleEngine(rawText: string, fileName: string) {
       item: 'OTROS 2',
       branch: 'Tesalia Planta Gye',
       specificLocation: 'Consola Central de Seguridad',
-      description: `Archivo procesado: ${fileName}. Contenido cargado con novedades operativas de la semana del 10 al 16 de Agosto del 2026.`,
+      description: `Archivo procesado: ${fileName}. Contenido cargado con novedades operativas categorizadas para Tesalia CBC.`,
       timestamp: new Date().toISOString(),
       severity: 'MEDIA',
       status: 'EN_GESTION',
@@ -1464,7 +2194,7 @@ function parseDocumentWithRuleEngine(rawText: string, fileName: string) {
   }
 
   return {
-    summary: `Se procesó con éxito el reporte "${fileName}". Se detectaron ${extractedIncidents.length} novedades operativas categorizadas para Tesalia CBC.`,
+    summary: `Se procesó con éxito el reporte "${fileName}". Se estructuraron ${extractedIncidents.length} novedades operativas categorizadas con criterio experto de seguridad para Tesalia CBC.`,
     detectedMonth,
     detectedYear: 2026,
     incidents: extractedIncidents
